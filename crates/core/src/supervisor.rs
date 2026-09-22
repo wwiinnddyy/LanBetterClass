@@ -99,9 +99,10 @@ impl Supervisor {
             Err(e) => {
                 let mut h = placeholder(spec.clone());
                 h.status = Status::Dead;
-                h.note = Some(format!("{e}"));
+                let msg = format!("{e}");
+                h.note = Some(msg.clone());
                 self.handles.push(h);
-                Err(h.note.unwrap_or_default())
+                Err(msg)
             }
         }
     }
