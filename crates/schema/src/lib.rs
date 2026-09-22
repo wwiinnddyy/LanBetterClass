@@ -18,6 +18,8 @@ pub const PROTO: u8 = 1;
 pub mod kinds {
     /// 核心自己写进日志的适配器自述记录，用于事后知道"这节课到底装了哪些源"。
     pub const CORE_ADMIT: &str = "core.admit";
+    /// 适配器崩溃后被重新拉起。跨过这条记录的 seq 空间是新的，不能当成重复事件。
+    pub const CORE_RESPAWN: &str = "core.respawn";
     pub const SESSION_OPEN: &str = "session.open";
     pub const SESSION_CLOSE: &str = "session.close";
     pub const INK_PAGE_ACTIVATE: &str = "ink.page_activate";

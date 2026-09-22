@@ -115,8 +115,7 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     }
     drop(tx);
 
-    // 核心自己也要写日志（core.admit），给它一个独立的 seq 空间。
-    let mut core_seq: u64 = 1;
+    // 核心自己写日志用独立的 seq 空间，由 Store 保管（见 Store::note）。
     let mut quit = false;
     let deadline = opts.num("max-seconds").map(|s| Instant::now() + Duration::from_secs(s));
     let mut last_report = Instant::now();
@@ -148,14 +147,10 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
                     match serde_json::from_value::<Admit>(value.clone()) {
                         Ok(a) => {
                             store.register_adapter(&adapter_id, a.manifest.budget.clone());
-                            let env = Envelope::new(
-                                core_seq,
+                            let _ = store.note(
                                 kinds::CORE_ADMIT,
-                                None,
                                 serde_json::json!({ "adapter_id": adapter_id, "manifest": a.manifest }),
                             );
-                            core_seq += 1;
-                            let _ = store.append("core", &env);
                             match sup.handle(&adapter_id) {
                                 Some(h) => {
                                     if let Err(e) = h.admit(&a) {
@@ -233,8 +228,12 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        for died in sup.reap() {
-            eprintln!("[core] {} 退出", died.0);
+        for (id, code) in sup.reap() {
+            let will_restart = sup.find(&id).map(|h| h.status == Status::Backoff).unwrap_or(false);
+            eprintln!("[core] {id} 退出（{code:?}）{}", if will_restart { "，退避后重启" } else { "" });
+            if will_restart {
+                store.note_respawn(&id)?;
+            }
         }
         for up in sup.respawn_due() {
             eprintln!("[core] {up} 已重启");

@@ -5,7 +5,7 @@
 //! 机器上最贵的那个依赖。真要换的时候，消费者读的仍是同一批 `StoredRecord`。
 
 use crate::protocol::shorten;
-use classagent_schema::{Budget, Envelope, Exceed, LessonInfo, LessonMeta, RecordStatus, StoredRecord};
+use classagent_schema::{kinds, Budget, Envelope, Exceed, LessonInfo, LessonMeta, RecordStatus, StoredRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -26,6 +26,7 @@ pub struct Store {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct State {
     next_global_seq: u64,
+    core_seq: u64,
     last_seq: HashMap<String, u64>,
     active_lesson: Option<String>,
 }
@@ -319,6 +320,23 @@ impl Store {
 
     pub fn last_seq(&self, adapter_id: &str) -> u64 {
         self.state.last_seq.get(adapter_id).copied().unwrap_or(0)
+    }
+
+    /// 核心自己也要往日志里写事实（谁装载了、谁重启了），否则这些只在进程退出
+    /// 前存在于内存里，事后无法解释为什么某段数据是残缺的。
+    pub fn note(&mut self, kind: &str, payload: serde_json::Value) -> std::io::Result<Outcome> {
+        self.state.core_seq += 1;
+        let seq = self.state.core_seq;
+        let env = Envelope::new(seq, kind, None, payload);
+        self.append("core", &env)
+    }
+
+    /// 适配器重启后它自己的 seq 会从 1 重新开始；不清零的话，重启之后的每一条
+    /// 都会被 gap 判定当成 Duplicate 收下，等于这节课后半段作废。
+    pub fn note_respawn(&mut self, adapter_id: &str) -> std::io::Result<()> {
+        self.state.last_seq.insert(adapter_id.to_string(), 0);
+        self.note(kinds::CORE_RESPAWN, serde_json::json!({ "adapter_id": adapter_id }))?;
+        Ok(())
     }
 }
 

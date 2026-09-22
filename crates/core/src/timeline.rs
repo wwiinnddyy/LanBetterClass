@@ -58,6 +58,8 @@ pub struct SourceHealth {
     pub over_budget: u64,
     pub rejected: u64,
     pub duplicates: u64,
+    /// 崩溃后被重启的次数。跨过这些边界的 seq 是新的，不能和前面比大小。
+    pub restarts: u64,
     /// 声明会产出却一条都没有——现场排障最先看这个。
     pub silent: bool,
 }
@@ -85,6 +87,7 @@ struct Accum {
     over: HashMap<String, u64>,
     rejected: HashMap<String, u64>,
     dup: HashMap<String, u64>,
+    restart: HashMap<String, u64>,
 }
 
 pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
@@ -121,6 +124,14 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
         match env.kind.as_str() {
             kinds::CORE_ADMIT => {
                 // 记下"这个源声称会产出什么"，课后没见到就能标成 silent。
+                // 这条记录是核心写的（adapter_id=core），所以归属必须取载荷里的源，
+                // 否则会把别人的 produces 挂到 core 头上。
+                let target = env
+                    .payload
+                    .get("adapter_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(r.adapter_id.as_str())
+                    .to_string();
                 let produces = env
                     .payload
                     .get("manifest")
@@ -128,7 +139,13 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|x| x.as_str()).map(|s| s.to_string()).collect())
                     .unwrap_or_default();
-                acc.declared.insert(r.adapter_id.clone(), produces);
+                acc.declared.insert(target, produces);
+            }
+            kinds::CORE_RESPAWN => {
+                // 重启不算进 track：它是关于采集过程本身的事实，不是课堂里发生的事。
+                if let Some(t) = env.payload.get("adapter_id").and_then(|v| v.as_str()) {
+                    *acc.restart.entry(t.to_string()).or_insert(0) += 1;
+                }
             }
             kinds::SESSION_OPEN => {
                 let w = env.payload.get("canvas_w").and_then(|v| v.as_f64());
@@ -325,6 +342,7 @@ fn health(acc: &Accum) -> HashMap<String, SourceHealth> {
                 over_budget: acc.over.get(id).copied().unwrap_or(0),
                 rejected: acc.rejected.get(id).copied().unwrap_or(0),
                 duplicates: acc.dup.get(id).copied().unwrap_or(0),
+                restarts: acc.restart.get(id).copied().unwrap_or(0),
                 silent: !declared.is_empty() && acc.accepted.get(id).copied().unwrap_or(0) == 0,
             },
         );
