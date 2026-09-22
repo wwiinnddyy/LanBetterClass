@@ -1,0 +1,12 @@
+{
+  "id": "a-whiteboard",
+  "argv": ["node", "./bridge/whiteboard-bridge.js"],
+  "cwd": ".",
+  "enabled": false,
+  "platforms": ["windows", "linux"],
+  "params": {
+    "note": "白板桥的示例声明：证明适配器与核心语言无关。核心只要求 stdin/stdout 上的 NDJSON。",
+    "ink_endpoint": "ws://127.0.0.1:0",
+    "handoff": "把白板的笔迹事件按 StrokeCommit 的字段打印到 stdout，第一行打印 Admit。"
+  }
+}

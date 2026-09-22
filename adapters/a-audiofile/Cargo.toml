@@ -1,0 +1,15 @@
+[package]
+name = "a-audiofile"
+description = "文件音频适配器：验证大块数据走 blob、消息只给引用的这条约定"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "a-audiofile"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+classagent-schema.workspace = true

@@ -1,0 +1,15 @@
+{
+  "id": "a-audiofile",
+  "argv": ["$TARGET_DIR/a-audiofile"],
+  "cwd": ".",
+  "enabled": false,
+  "platforms": ["windows", "linux"],
+  "params": {
+    "path": "REPLACE_ME/课堂录音.wav",
+    "codec": "pcm_s16le",
+    "sample_rate": 16000,
+    "channels": 1,
+    "chunk_ms": 1000,
+    "speed": 400
+  }
+}

@@ -1,0 +1,10 @@
+[package]
+name = "classagent-schema"
+description = "线协议：采集核心与数据源适配器之间的唯一契约"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

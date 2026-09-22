@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
+      # Linux 这一腿兼任端到端：CI 的磁盘不是约束，所以让它在真实进程模型上
+      # 把"开课 → 适配器投递 → 落盘 → 导出 AI 载荷"整条路跑一遍。
+      - name: smoke (core + a-fake)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATA=/tmp/ci-data
+          rm -rf "$DATA"
+          ./target/debug/classagent-core run --data "$DATA" --lesson examples/lesson.demo.json --max-seconds 15 < /dev/null
+          echo '--- status ---'
+          ./target/debug/classagent-core status --data "$DATA"
+          echo '--- export ---'
+          ./target/debug/classagent-core export --data "$DATA" --lesson L-demo-0001
+          echo '--- blob 与事件量 ---'
+          du -sh "$DATA" || true
+          find "$DATA" -name 'blobs' -type d -printf '%p: ' -exec sh -c 'ls -1 "$1" | wc -l' _ {} \; || true
+          wc -l "$DATA/lessons/L-demo-0001/events.ndjson"
+          python3 - <<'PY'
+          import json
+          p = json.load(open('/tmp/ci-data/lessons/L-demo-0001/ai_payload.json'))
+          st = p['stats']
+          print('track=%d strokes=%d utterances=%d erases=%d pages=%d' % (
+              len(p['track']), st['strokes'], st['utterances'], st['erases'], st['pages_touched']))
+          print('ink_time=%dms writing_while_speaking=%dms longest_silence=%dms' % (
+              st['ink_time_ms'], st['writing_while_speaking_ms'], st['longest_silence_ms']))
+          print('sources=%s' % {k: v['events'] for k, v in p['sources'].items()})
+          print('warnings=%s' % p['warnings'])
+          assert st['strokes'] > 50, '笔迹事件太少，对齐链路没跑通'
+          assert st['utterances'] > 50, '转写事件太少'
+          assert any(i['kind'] == 'ink.stroke_commit' for i in p['track'])
+          assert any(i['kind'] == 'asr.utterance' for i in p['track'])
+          kinds = {i['kind'] for i in p['track']}
+          assert 'ink.stroke_delete' in kinds, 'undo/擦除没进 track'
+          assert p['sources'].get('core', {}).get('events', 0) > 0, 'core.admit 没落盘'
+          assert len(p['sources']) >= 2, '源健康表没建立'
+          # 时间轴必须真的交错了：同一页上墨迹与语音要有重叠区间
+          assert st['writing_while_speaking_ms'] > 0, '墨迹与语音完全没有重叠，对齐可疑'
+          print('SMOKE OK')
+          PY
+
+      - name: artifact
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bin
+          path: |
+            target/debug/classagent-core
+            target/debug/a-fake
+            target/debug/a-audiofile
+          if-no-files-found: warn

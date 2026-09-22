@@ -1,0 +1,8 @@
+{
+  "id": "a-fake",
+  "argv": ["$TARGET_DIR/a-fake"],
+  "cwd": ".",
+  "enabled": true,
+  "platforms": ["windows", "linux"],
+  "params": { "speed": 400, "minutes": 45 }
+}

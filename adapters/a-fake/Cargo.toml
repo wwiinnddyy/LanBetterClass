@@ -1,0 +1,15 @@
+[package]
+name = "a-fake"
+description = "模拟数据源：不接任何真实设备，用来验证总线契约与时间轴对齐"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "a-fake"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+classagent-schema.workspace = true

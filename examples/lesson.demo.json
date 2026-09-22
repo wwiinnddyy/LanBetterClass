@@ -1,0 +1,13 @@
+{
+  "lesson_id": "L-demo-0001",
+  "prev_lesson_id": null,
+  "subject": "数学",
+  "class": "初二(3)班",
+  "teacher": "张老师",
+  "courseware": [
+    { "doc_id": "cw-勾股-1", "path": "课件/勾股定理.pptx", "format": "pptx", "sha256": null }
+  ],
+  "params": {
+    "expected_adapters": ["a-fake", "a-whiteboard"]
+  }
+}

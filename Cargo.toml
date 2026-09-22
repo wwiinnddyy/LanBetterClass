@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/schema", "crates/core", "adapters/a-fake", "adapters/a-audiofile"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+classagent-schema = { path = "crates/schema" }
+
+# 这台机器的磁盘是约束条件之一：debug=0 省掉 Windows 上体积最大的 PDB。
+[profile.dev]
+debug = 0
+incremental = true
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 16
