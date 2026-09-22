@@ -30,10 +30,10 @@ jobs:
           key: ${{ matrix.os }}
 
       - name: build
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --message-format=short
 
       - name: test
-        run: cargo test --workspace
+        run: cargo test --workspace --message-format=short
 
       # Linux 这一腿兼任端到端：CI 的磁盘不是约束，所以让它在真实进程模型上
       # 把"开课 → 适配器投递 → 落盘 → 导出 AI 载荷"整条路跑一遍。

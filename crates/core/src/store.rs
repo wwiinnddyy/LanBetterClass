@@ -209,10 +209,14 @@ impl Store {
             Some((e, b, age)) if age < std::time::Duration::from_secs(1) => (e, b),
             _ => (0, 0),
         };
-        let over = budget
-            .map(|b| (we + 1) > b.max_events_per_s || (wb + est) > b.max_bytes_per_s)
-            .unwrap_or(false);
-        let kill = over && budget.map(|b| b.on_exceed == Exceed::Kill).unwrap_or(false);
+        let (over, kill) = match budget {
+            Some(b) => (
+                (we + 1) > b.max_events_per_s || (wb + est) > b.max_bytes_per_s,
+                b.on_exceed == Exceed::Kill,
+            ),
+            None => (false, false),
+        };
+        let kill = over && kill;
         if over && rec.status == RecordStatus::Accepted {
             rec.status = RecordStatus::OverBudget;
         }

@@ -43,10 +43,25 @@ fn main() {
     }
 }
 
-type Opts = HashMap<String, String>;
+/// 新type 而不是 `type Opts = HashMap<...>`：对别名写 inherent impl 就是给别的
+/// crate 的类型定义方法，E0116。
+#[derive(Default)]
+struct Opts {
+    m: HashMap<String, String>,
+}
+
+impl Opts {
+    fn val(&self, key: &str) -> Option<&str> {
+        self.m.get(key).map(|s| s.as_str())
+    }
+
+    fn num(&self, key: &str) -> Option<u64> {
+        self.m.get(key).and_then(|v| v.parse().ok())
+    }
+}
 
 fn parse_opts(args: &[String]) -> Opts {
-    let mut m = Opts::new();
+    let mut m = HashMap::new();
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -60,19 +75,7 @@ fn parse_opts(args: &[String]) -> Opts {
         }
         i += 1;
     }
-    m
-}
-
-impl Opts {
-    /// 故意不叫 `get`：与 `HashMap::get` 同名会返回 `Option<&String>`，
-    /// 而所有调用点都想要 `&str`，写在一处省掉满屏的 `unwrap_or("...")` 类型错。
-    fn val(&self, key: &str) -> Option<&str> {
-        self.get(key).map(|s| s.as_str())
-    }
-
-    fn num(&self, key: &str) -> Option<u64> {
-        self.get(key).and_then(|v| v.parse().ok())
-    }
+    Opts { m }
 }
 
 fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {

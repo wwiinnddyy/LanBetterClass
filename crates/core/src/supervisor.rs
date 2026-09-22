@@ -5,6 +5,7 @@
 
 use crate::protocol::{read_line, write_line};
 use classagent_schema::{resolve_argv, Admit, Command as WireCommand, Manifest, PROTO};
+use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command as OsCommand, ExitStatus, Stdio};
 use std::sync::mpsc::Sender;

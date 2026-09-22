@@ -390,7 +390,7 @@ fn overlap_ms(a: &[(u64, u64)], b: &[(u64, u64)]) -> u64 {
     if a.is_empty() || b.is_empty() {
         return 0;
     }
-    let mut bs: Vec<&(u64, u64)> = b.iter().collect();
+    let mut bs: Vec<(u64, u64)> = b.iter().copied().collect();
     bs.sort_by_key(|s| s.0);
     let mut total = 0u64;
     for &(s, e) in a {
