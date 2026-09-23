@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>agent · 课堂观察端</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>agent · 课堂观察端</h1>
+    <div id="status" class="status">未连接</div>
+  </header>
+
+  <section class="conn">
+    <label>客户端 <input id="clientBase" value="http://127.0.0.1:8786" spellcheck="false" /></label>
+    <label>服务端 <input id="serverBase" value="http://127.0.0.1:8790" spellcheck="false" /></label>
+    <label>Token <input id="token" type="password" placeholder="服务端写操作令牌（可选）" /></label>
+    <button id="btnConnect" class="primary">测试连接</button>
+  </section>
+
+  <nav class="tabs">
+    <button data-tab="lessons" class="active">课程摘要</button>
+    <button data-tab="adapters">数据源配置</button>
+    <button data-tab="server">服务端</button>
+  </nav>
+
+  <main>
+    <!-- 课程摘要：读客户端 core serve -->
+    <section id="tab-lessons" class="tab active">
+      <aside class="list-pane">
+        <h3>客户端课程</h3>
+        <ul id="clientLessons"><li class="empty">点“测试连接”加载</li></ul>
+      </aside>
+      <div class="detail-pane">
+        <h3 id="lessonTitle">选择左侧一节课</h3>
+        <div id="lessonStats" class="stats"></div>
+        <pre id="lessonDigest" class="digest">digest（一节课的可读摘要）会显示在这里。</pre>
+      </div>
+    </section>
+
+    <!-- 数据源配置：读 /api/adapters，写 POST /api/adapter/<file>（需客户端 --allow-write） -->
+    <section id="tab-adapters" class="tab">
+      <p class="hint">开关数据源需客户端以 <code>serve --allow-write</code> 启动；改的是 <code>adapters.d/*.adapter.json</code>，下次启动或该源重启时生效。</p>
+      <table id="adapterTable">
+        <thead><tr><th>ID</th><th>声明文件</th><th>平台</th><th>状态</th><th></th></tr></thead>
+        <tbody><tr><td colspan="5" class="empty">点“测试连接”加载</td></tr></tbody>
+      </table>
+    </section>
+
+    <!-- 服务端：读 classagent-server -->
+    <section id="tab-server" class="tab">
+      <div id="serverHealth" class="hint">服务端状态未获取</div>
+      <div class="split">
+        <aside class="list-pane">
+          <h3>服务端已收课程</h3>
+          <ul id="serverLessons"><li class="empty">点“测试连接”加载</li></ul>
+        </aside>
+        <div class="detail-pane">
+          <h3 id="serverTitle">AI 请求单 / 载荷</h3>
+          <pre id="serverDetail" class="digest">选择左侧一节课，查看服务端生成的 ai_request.json。</pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

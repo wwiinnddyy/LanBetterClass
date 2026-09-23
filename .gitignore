@@ -4,5 +4,7 @@
 /.ci-integ
 /.ci-artifacts
 /try
+/agent/src-tauri/target/
+/agent/src-tauri/gen/
 *.pdb
 *.exe

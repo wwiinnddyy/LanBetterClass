@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "agent 观察端默认能力：允许主窗口调用应用自定义命令（http_get / http_post）",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

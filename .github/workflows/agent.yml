@@ -1,0 +1,53 @@
+name: agent
+
+# 观察端（Tauri）独立工作流：单独装 webview 系统依赖并编译校验，
+# 不并进 ci.yml —— 免得把重量级 GUI 依赖拖进已全绿的 client/server 流水线。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - ".github/workflows/agent.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - ".github/workflows/agent.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Tauri 在 Linux 需要 webview / GTK 系统库；Windows 的 WebView2 SDK 由 runner 自带。
+      - name: Install system deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: agent-${{ matrix.os }}
+
+      - name: build
+        run: cargo build --manifest-path agent/src-tauri/Cargo.toml --message-format=short
+
+      - name: test
+        run: cargo test --manifest-path agent/src-tauri/Cargo.toml --message-format=short

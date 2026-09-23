@@ -1,0 +1,26 @@
+{
+  "productName": "agent",
+  "version": "0.1.0",
+  "identifier": "com.classagent.agent",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "agemt · 课堂观察端",
+        "width": 1160,
+        "height": 780,
+        "minWidth": 860,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

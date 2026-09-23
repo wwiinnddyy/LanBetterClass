@@ -1,0 +1,17 @@
+[package]
+name = "agent"
+version = "0.1.0"
+description = "课堂观察端：连接采集客户端与远程服务端的可视化配置与查看（Tauri）"
+edition = "2021"
+
+# 独立 workspace：刻意不并入根 Cargo.toml 的 members，
+# 免得把重量级 webview 依赖拖进已全绿的 client/server CI。
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
