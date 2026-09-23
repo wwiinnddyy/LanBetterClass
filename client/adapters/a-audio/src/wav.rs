@@ -186,15 +186,24 @@ mod tests {
 
     #[test]
     fn unknown_chunks_are_skipped_and_odd_lengths_stay_aligned() {
-        // 录音笔导出的文件常带 LIST 块；奇数长度块后面有 1 字节填充，
-        // 解析不能因此错位——错位的代价是把 data 的起点读歪，整段变噪音。
-        let mut full = make_header(8_000, 1, 4).to_vec();
-        let mut list = Vec::new();
-        list.extend_from_slice(b"LIST");
-        list.extend_from_slice(&3u32.to_le_bytes()); // 奇数长度
-        list.extend_from_slice(b"abc");
-        list.push(0); // 填充字节
-        full.extend_from_slice(&list);
+        // 录音笔导出的文件常带 LIST 等杂块，且块长可能是奇数（后面补 1 字节填充）。
+        // 逐块错位一个字节，data 的起点就读歪，整段会变成噪音。
+        let mut full = Vec::new();
+        full.extend_from_slice(b"RIFF");
+        full.extend_from_slice(&0u32.to_le_bytes()); // 总长由解析器忽略，它只沿块链走
+        full.extend_from_slice(b"WAVE");
+        full.extend_from_slice(b"fmt ");
+        full.extend_from_slice(&16u32.to_le_bytes());
+        full.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        full.extend_from_slice(&1u16.to_le_bytes()); // 单声道
+        full.extend_from_slice(&8_000u32.to_le_bytes());
+        full.extend_from_slice(&16_000u32.to_le_bytes()); // byte rate
+        full.extend_from_slice(&2u16.to_le_bytes()); // block align
+        full.extend_from_slice(&16u16.to_le_bytes()); // bits
+        full.extend_from_slice(b"LIST");
+        full.extend_from_slice(&3u32.to_le_bytes()); // 奇数长度
+        full.extend_from_slice(b"abc");
+        full.push(0); // 填充
         full.extend_from_slice(b"data");
         full.extend_from_slice(&4u32.to_le_bytes());
         full.extend_from_slice(&(-2i16).to_le_bytes());
@@ -202,6 +211,7 @@ mod tests {
 
         let back = parse(&full).expect("LIST 块不该影响解析");
         assert_eq!(back.sample_rate, 8_000);
+        assert_eq!(back.channels, 1);
         assert_eq!(back.samples, vec![-2, 300]);
     }
 }
