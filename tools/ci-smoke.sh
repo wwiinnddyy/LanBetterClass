@@ -169,6 +169,17 @@ if fails:
 print('DIGEST OK')
 PY
 
+# 开着课却一个数据源都没有：必须几秒内喊出来。安静地产出一节空课是现场最贵的失败。
+EMPTY=$WORK/empty-adapters
+rm -rf "$EMPTY" /tmp/ci-no-src; mkdir -p "$EMPTY"
+"$BIN/classagent-core" run --data /tmp/ci-no-src --adapters "$EMPTY" --lesson examples/lesson.demo.json --max-seconds 8 \
+  < /dev/null > "$WORK/no-source.log" 2>&1 || true
+if grep -q '仍收到 0 条事件' "$WORK/no-source.log"; then
+  echo "OK 空源告警已触发"
+else
+  echo "FAIL 空源没有告警"; tail -8 "$WORK/no-source.log"; exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # 看板服务。这里不验"页面好不好看"，验的是接口与边界：
 # 路径穿越必须挡、只读模式必须拒写、blob 要按字节原样取回、开写后声明文件真被改。

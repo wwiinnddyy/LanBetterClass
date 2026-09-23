@@ -310,7 +310,9 @@ fn print_status(store: &Store, sup: &Supervisor) {
         "[core] {} 课={lesson} proto=v{PROTO}",
         hhmmss(classagent_schema::utc_ms())
     );
+    let mut total = 0u64;
     for (id, st) in store.stats() {
+        total += st.events;
         // "core" 是核心自己的 seq 空间（admit / respawn 标记），不是子进程，没有句柄。
         let status = match id.as_str() {
             "core" => "自身".to_string(),
@@ -327,8 +329,15 @@ fn print_status(store: &Store, sup: &Supervisor) {
         );
     }
     for h in sup.status_table() {
-        if !store.stats().iter().any(|(id, _)| *id == h.0) {
+        if !store.known_source(&h.0) {
             println!("  {:<16} {:?} {}", h.0, h.1, h.2.unwrap_or_default());
+        }
+    }
+    // 开着课却一条都没收到：这是现场最贵的一种失败，不能等下课再发现。
+    if let Some(m) = store.active_lesson() {
+        let age_s = classagent_schema::mono_us().saturating_sub(m.started_core_mono_us) / 1_000_000;
+        if age_s >= 5 && total == 0 {
+            println!("  ！开课 {age_s} 秒仍收到 0 条事件：检查 --adapters 目录是否存在、里面的程序能不能起来");
         }
     }
 }

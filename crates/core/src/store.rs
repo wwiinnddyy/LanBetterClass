@@ -323,6 +323,10 @@ impl Store {
         self.state.last_seq.get(adapter_id).copied().unwrap_or(0)
     }
 
+    pub fn known_source(&self, id: &str) -> bool {
+        self.rates.contains_key(id)
+    }
+
     /// 核心自己也要往日志里写事实（谁装载了、谁重启了），否则这些只在进程退出
     /// 前存在于内存里，事后无法解释为什么某段数据是残缺的。
     pub fn note(&mut self, kind: &str, payload: serde_json::Value) -> std::io::Result<Outcome> {
