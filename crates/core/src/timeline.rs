@@ -90,8 +90,9 @@ struct Accum {
     restart: HashMap<String, u64>,
 }
 
-/// 上一代事件流的结尾与下一代起点之间的留白，避免两段首尾同毫秒分不清。
-const RESUME_GAP_MS: u64 = 1_000;
+/// 上一代事件流的结尾与下一代起点之间的留白。必须大于单条事件自身的跨度
+/// （一句话 1.8 秒），否则接缝会把两代叠回去。
+const RESUME_GAP_MS: u64 = 3_000;
 
 pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
     let mut acc = Accum::default();
@@ -147,7 +148,9 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
             let c = cursors.entry(r.adapter_id.clone()).or_default();
             if let Some(v) = boundaries.get(&r.adapter_id) {
                 while c.next < v.len() && v[c.next] <= r.t_core_mono_us {
-                    c.base += c.max_seen + RESUME_GAP_MS;
+                    // max_seen 已经是平移后的绝对时间，这里是赋值不是累加：
+                    // 累加会把上一代用过的 base 再加一遍，接缝被推到几百秒之外。
+                    c.base = c.max_seen + RESUME_GAP_MS;
                     c.next += 1;
                 }
             }

@@ -123,7 +123,8 @@ need(st['writing_while_speaking_ms'] <= st['ink_time_ms'],
 need(max_t1 > 2_600_000,
      f'track 最大只有 {max_t1}ms：三次重启的三段 sim 时间叠在了同一根轴上，没有按 respawn 边界接起来')
 need(any('a-whiteboard' in w for w in p['warnings']), '期望适配器缺失的告警没触发')
-need(200 <= st['longest_silence_ms'] <= 1000, f"最长静默 {st['longest_silence_ms']}ms 与模拟节奏(600ms)不符")
+need(200 <= st['longest_silence_ms'] <= 6_000,
+     f"最长静默 {st['longest_silence_ms']}ms：重启接缝应当是秒级，几百秒说明整段 sim 时间被复制了一份")
 
 if fails:
     print('SMOKE FAIL')
