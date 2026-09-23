@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClassAgent 架构 · 现状框线图</title>
+<style>
+  :root{--bg:#0d1014;--p:#14181f;--p2:#1a1f28;--line:#2a3242;--fg:#e6e9ef;--dim:#8b94a6;
+        --done:#9ece6a;--part:#7aa2f7;--plan:#e0af68;--tbd:#f7768e;--seam:#565f72}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:13px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{padding:20px 22px 40px}
+  h1{font-size:18px;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:12.5px;margin:0 0 14px}
+  svg{width:100%;height:auto;display:block;
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .t{fill:var(--fg);font-size:13px;font-weight:600}
+  .s{fill:var(--dim);font-size:11px}
+  .tt{fill:var(--fg);font-size:12px;font-weight:600}
+  .cap{fill:var(--dim);font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ClassAgent 架构 · 现状框线图</h1>
+  <p class="sub">核心只认识「事件」，不认识任何数据源。绿=已实现且CI断言 · 黄=接口留位未实现 · 红=需求未定 · 虚线=现状未连接（设计里的接缝）</p>
+
+<svg viewBox="0 0 1200 742" role="img" aria-label="ClassAgent 现状架构框线图">
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#8b94a6"/>
+    </marker>
+    <marker id="ad" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 z" fill="#e0af68"/>
+    </marker>
+  </defs>
+
+  <!-- ================= ① 一体机 / 采集客户端（外框） ================= -->
+  <rect x="28" y="58" width="778" height="576" rx="12" fill="#14181f" stroke="#2a3242"/>
+  <text class="t" x="44" y="80">① 一体机 · 采集客户端　（同一台机器，单个二进制 classagent-core）</text>
+  <text class="s" x="640" y="80">目标机：8th-gen i5 级</text>
+
+  <!-- 适配器带 标题 -->
+  <text class="cap" x="44" y="104">数据源适配器 = 各自独立子进程 · NDJSON over stdio · 放进 adapters.d/ 即启用，改名即停用（语言无关）</text>
+
+  <!-- 6 个适配器框 -->
+  <!-- x: 44,167,290,413,536,659  w116 h56 y=112 -->
+  <g>
+    <!-- a-fake -->
+    <rect x="44" y="112" width="116" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+    <rect x="44" y="112" width="4" height="56" rx="2" fill="#9ece6a"/>
+    <text class="tt" x="58" y="134">a-fake</text>
+    <text class="s" x="58" y="151">脚本源 缺口/崩溃</text>
+    <text class="s" x="58" y="164" fill="#9ece6a">已验证</text>
+    <!-- a-audiofile -->
+    <rect x="167" y="112" width="116" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+    <rect x="167" y="112" width="4" height="56" rx="2" fill="#9ece6a"/>
+    <text class="tt" x="181" y="134">a-audiofile</text>
+    <text class="s" x="181" y="151">音频分段→blob</text>
+    <text class="s" x="181" y="164" fill="#9ece6a">已验证</text>
+    <!-- a-whiteboard -->
+    <rect x="290" y="112" width="116" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+    <rect x="290" y="112" width="4" height="56" rx="2" fill="#e0af68"/>
+    <text class="tt" x="304" y="134">a-whiteboard</text>
+    <text class="s" x="304" y="151">你的白板 契约已定</text>
+    <text class="s" x="304" y="164" fill="#e0af68">留位</text>
+    <!-- a-audio -->
+    <rect x="413" y="112" width="116" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+    <rect x="413" y="112" width="4" height="56" rx="2" fill="#e0af68"/>
+    <text class="tt" x="427" y="134">a-audio</text>
+    <text class="s" x="427" y="151">WASAPI+Opus+VAD</text>
+    <text class="s" x="427" y="164" fill="#e0af68">未实现</text>
+    <!-- a-screen -->
+    <rect x="536" y="112" width="116" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+    <rect x="536" y="112" width="4" height="56" rx="2" fill="#e0af68"/>
+    <text class="tt" x="550" y="134">a-screen</text>
+    <text class="s" x="550" y="151">DXGI 变化帧</text>
+    <text class="s" x="550" y="164" fill="#e0af68">未实现</text>
+    <!-- a-eval / courseware -->
+    <rect x="659" y="112" width="116" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+    <rect x="659" y="112" width="4" height="56" rx="2" fill="#f7768e"/>
+    <text class="tt" x="673" y="134">a-eval · 课件</text>
+    <text class="s" x="673" y="151">评估口径未定</text>
+    <text class="s" x="673" y="164" fill="#f7768e">需求未定</text>
+  </g>
+
+  <!-- 协议箭头（适配器 ↔ core） -->
+  <line x1="300" y1="168" x2="300" y2="214" stroke="#8b94a6" stroke-width="1.4" marker-end="url(#a)"/>
+  <text class="s" x="205" y="192">stdin：Command</text>
+  <line x1="470" y1="214" x2="470" y2="168" stroke="#8b94a6" stroke-width="1.4" marker-end="url(#a)"/>
+  <text class="s" x="486" y="192">stdout：Admit+Envelope</text>
+  <text class="s" x="628" y="192">信封 kind = 开放字符串（非枚举）</text>
+
+  <!-- ================= classagent-core 外框 ================= -->
+  <rect x="44" y="216" width="732" height="192" rx="10" fill="#12161d" stroke="#33405a" stroke-dasharray="1 0"/>
+  <text class="tt" x="58" y="236">classagent-core　无模型 · 无渲染 · 无窗口的二进制</text>
+
+  <!-- 行1 -->
+  <rect x="58" y="250" width="228" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+  <rect x="58" y="250" width="4" height="56" rx="2" fill="#9ece6a"/>
+  <text class="tt" x="72" y="272">supervisor</text>
+  <text class="s" x="72" y="289">spawn / 退避重启 / 重启清零 seq</text>
+  <text class="s" x="72" y="302">预算 Log·Degrade·Kill</text>
+
+  <rect x="302" y="250" width="228" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+  <rect x="302" y="250" width="4" height="56" rx="2" fill="#9ece6a"/>
+  <text class="tt" x="316" y="272">store</text>
+  <text class="s" x="316" y="289">events.ndjson 追加 + blobs/</text>
+  <text class="s" x="316" y="302">state.json 原子替换 · 不用 SQLite</text>
+
+  <rect x="546" y="250" width="228" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+  <rect x="546" y="250" width="4" height="56" rx="2" fill="#9ece6a"/>
+  <text class="tt" x="560" y="272">timeline</text>
+  <text class="s" x="560" y="289">多源按时间交错成一条 track</text>
+  <text class="s" x="560" y="302">墨迹折叠成人话 → ai_payload.json</text>
+
+  <!-- 行2 -->
+  <rect x="58" y="326" width="228" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+  <rect x="58" y="326" width="4" height="56" rx="2" fill="#9ece6a"/>
+  <text class="tt" x="72" y="348">digest</text>
+  <text class="s" x="72" y="365">可读摘要 5 段</text>
+  <text class="s" x="72" y="378">含「本轮不能下什么结论」</text>
+
+  <rect x="302" y="326" width="228" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+  <rect x="302" y="326" width="4" height="56" rx="2" fill="#9ece6a"/>
+  <text class="tt" x="316" y="348">serve　本地看板</text>
+  <text class="s" x="316" y="365">tiny_http · 默认只绑 127.0.0.1</text>
+  <text class="s" x="316" y="378">只读；写要 --allow-write</text>
+
+  <rect x="546" y="326" width="228" height="56" rx="8" fill="#1a1f28" stroke="#2a3242"/>
+  <rect x="546" y="326" width="4" height="56" rx="2" fill="#9ece6a"/>
+  <text class="tt" x="560" y="348">时钟与对齐</text>
+  <text class="s" x="560" y="365">双时钟 utc + mono 分开记</text>
+  <text class="s" x="560" y="378">core.respawn 边界平移</text>
+
+  <!-- 底部两个产物框 + 连线 -->
+  <line x1="418" y1="408" x2="230" y2="452" stroke="#8b94a6" stroke-width="1.4" marker-end="url(#a)"/>
+  <line x1="660" y1="408" x2="580" y2="452" stroke="#8b94a6" stroke-width="1.4" marker-end="url(#a)"/>
+
+  <rect x="44" y="452" width="360" height="48" rx="8" fill="#14181f" stroke="#2c4266"/>
+  <text class="tt" x="58" y="472" fill="#7aa2f7">浏览器看板　（本机回环 · 只读）</text>
+  <text class="s" x="58" y="490">serve 的读者：/ 页面 · /api/lesson/… · /stats</text>
+
+  <rect x="418" y="452" width="358" height="48" rx="8" fill="#14181f" stroke="#2b4526"/>
+  <text class="tt" x="432" y="472" fill="#9ece6a">本机产物（文件 / JSON 边界）</text>
+  <text class="s" x="432" y="490">events.ndjson · blobs/ · ai_payload.json · digest.txt</text>
+
+  <text class="s" x="44" y="536">出机器量级：音频 Opus 16k ≈ 5–10 MB · 事件 &lt; 1 MB · 连续视频 1.35–2.7 GB（不做，为省 GPU/带宽，非 CPU 不够）</text>
+  <text class="s" x="44" y="556">实测开销：事件总线 ≈ 0.02% CPU / 11 MB 工作集（笔记本口径）；音频编码与屏幕采集尚未实现 = 开销主体待测</text>
+  <text class="s" x="44" y="576">两道硬边界（CI 断言）：文件边界（blob 白名单挡路径穿越） · 数据边界（坏行/跳号/超预算只标记不静默丢）</text>
+
+  <!-- 网络边界竖线 -->
+  <line x1="822" y1="58" x2="822" y2="634" stroke="#565f72" stroke-width="1.4" stroke-dasharray="6 6"/>
+  <text class="s" x="808" y="350" transform="rotate(-90 808 350)" fill="#565f72">网 络 边 界 · 现 状 未 连 接</text>
+
+  <!-- ================= ② 云端 / AI（外框，全部虚线 = 未接入） ================= -->
+  <rect x="844" y="58" width="330" height="576" rx="12" fill="none" stroke="#565f72" stroke-dasharray="7 6"/>
+  <text class="t" x="860" y="80">② 远程服务端 / AI</text>
+  <text class="s" x="860" y="98" fill="#f7768e">现状：设计里有，链路未接入（仅留接缝）</text>
+
+  <!-- ASR 回灌 -->
+  <rect x="862" y="112" width="294" height="64" rx="8" fill="none" stroke="#e0af68" stroke-dasharray="6 5"/>
+  <text class="tt" x="876" y="134" fill="#e0af68">云端 ASR（词级 + 说话人分离）</text>
+  <text class="s" x="876" y="152">结果「作为同一个适配器」回灌总线</text>
+  <text class="s" x="876" y="166">→ asr.utterance 对齐逻辑只有一套</text>
+
+  <!-- LLM 四调用 -->
+  <rect x="862" y="190" width="294" height="150" rx="8" fill="none" stroke="#e0af68" stroke-dasharray="6 5"/>
+  <text class="tt" x="876" y="212" fill="#e0af68">LLM 四次调用（各一次，不合并）</text>
+  <text class="s" x="876" y="234">· 观察日志（3 秒采样 = 规则活先做）</text>
+  <text class="s" x="876" y="254">· 当堂笔记（语义压缩 = 模型活）</text>
+  <text class="s" x="876" y="274">· 活动分析</text>
+  <text class="s" x="876" y="294">· 后续建议</text>
+  <text class="s" x="876" y="326">规则活与模型活不混进同一个 prompt</text>
+
+  <!-- 衔接链 -->
+  <rect x="862" y="354" width="294" height="70" rx="8" fill="none" stroke="#e0af68" stroke-dasharray="6 5"/>
+  <text class="tt" x="876" y="376" fill="#e0af68">衔接上节课</text>
+  <text class="s" x="876" y="394">prev_lesson_id 显式链 + 每节末</text>
+  <text class="s" x="876" y="410">定长课程状态卡（非向量检索）</text>
+
+  <!-- 上传管线占位 -->
+  <rect x="862" y="438" width="294" height="64" rx="8" fill="none" stroke="#e0af68" stroke-dasharray="6 5"/>
+  <text class="tt" x="876" y="460" fill="#e0af68">上传 / 落库管线</text>
+  <text class="s" x="876" y="478">现状无：只有导出的 ai_payload.json</text>
+  <text class="s" x="876" y="493">无在线 push（CLI 无 upload 命令）</text>
+
+  <!-- 跨边界虚线箭头 -->
+  <!-- 出：ai_payload → 上传 -->
+  <line x1="776" y1="480" x2="862" y2="470" stroke="#e0af68" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#ad)"/>
+  <text class="s" x="700" y="470" fill="#e0af68">ai_payload</text>
+  <!-- 入：ASR 回灌 → 适配器带（指向左） -->
+  <line x1="862" y1="144" x2="775" y2="144" stroke="#e0af68" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#ad)"/>
+  <text class="s" x="782" y="136" fill="#e0af68">回灌</text>
+  <!-- 消费：ai_payload → LLM -->
+  <line x1="776" y1="468" x2="862" y2="300" stroke="#e0af68" stroke-width="1.2" stroke-dasharray="5 5" marker-end="url(#ad)"/>
+
+  <!-- ================= 图例 ================= -->
+  <g>
+    <rect x="28" y="656" width="1146" height="72" rx="10" fill="#12161d" stroke="#2a3242"/>
+    <text class="tt" x="44" y="680">图例 / 现状判断</text>
+    <rect x="200" y="670" width="12" height="12" rx="3" fill="#9ece6a"/><text class="s" x="218" y="680">已实现 + CI 断言</text>
+    <rect x="340" y="670" width="12" height="12" rx="3" fill="#e0af68"/><text class="s" x="358" y="680">接口留位未实现</text>
+    <rect x="472" y="670" width="12" height="12" rx="3" fill="#f7768e"/><text class="s" x="490" y="680">需求未定</text>
+    <rect x="576" y="670" width="12" height="12" rx="3" fill="#7aa2f7"/><text class="s" x="594" y="680">本机回环（非远程）</text>
+    <line x1="716" y1="676" x2="748" y2="676" stroke="#e0af68" stroke-width="1.6" stroke-dasharray="6 5"/><text class="s" x="754" y="680">现状未连接的接缝</text>
+
+    <text class="s" x="44" y="704" fill="#b9c3d6">结论：输入侧（数据源 → 采集）已模块化 = 独立子进程适配器，插拔不改核心；「客户端发送→远程服务端→AI」这半条链目前是【设计接缝】，尚未实现。</text>
+    <text class="s" x="44" y="722" fill="#b9c3d6">AI 侧模块化：生产者（如云 ASR 回灌）复用同一适配器机制；消费者（4 次 LLM）刻意留在核心外，经文件/JSON 契约交接。要做成「可插拔 sink」是下一步可拍板的方向。</text>
+  </g>
+</svg>
+</div>
+</body>
+</html>
