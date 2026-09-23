@@ -25,6 +25,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # a-audio 用 cpal 取麦克风：Linux 侧的 ALSA 绑定在编译期需要系统头文件；
+      # Windows 侧走纯 Rust 的 windows 绑定，runner 自带，不需要额外安装。
+      - name: Install system deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
@@ -46,6 +54,11 @@ jobs:
         shell: bash
         run: bash tools/ci-integration.sh
 
+      # 录音适配器：用 fixture 回放断真分段/真 blob/真导出，再断"本机没麦克风必须被标 silent"。
+      - name: audio (a-audio)
+        shell: bash
+        run: bash tools/ci-audio.sh
+
       - name: strip linker junk
         shell: bash
         run: rm -f target/debug/*.d
@@ -59,4 +72,5 @@ jobs:
             target/debug/classagent-server*
             target/debug/a-fake*
             target/debug/a-audiofile*
+            target/debug/a-audio*
           if-no-files-found: warn

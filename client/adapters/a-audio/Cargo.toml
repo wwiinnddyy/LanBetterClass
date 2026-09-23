@@ -1,0 +1,17 @@
+[package]
+name = "a-audio"
+description = "录音适配器：真输入设备采集，按话轮分段写 WAV blob，产出 audio.chunk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "a-audio"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+classagent-schema.workspace = true
+# 唯一碰平台音频 API 的地方。cpal 在 Windows 走 WASAPI（纯 Rust 绑定），
+# Linux 走 ALSA（编译期需要 libasound2-dev，见 .github/workflows/ci.yml）。
+cpal.workspace = true

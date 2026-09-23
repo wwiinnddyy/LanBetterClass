@@ -2,6 +2,7 @@
 /data
 /.ci-tmp
 /.ci-integ
+/.ci-audio
 /.ci-artifacts
 /try
 /agent/src-tauri/target/

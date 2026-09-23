@@ -1,0 +1,17 @@
+{
+  "id": "a-audio",
+  "argv": ["$TARGET_DIR/a-audio"],
+  "cwd": ".",
+  "enabled": false,
+  "platforms": ["windows", "linux"],
+  "params": {
+    "source": "fixture",
+    "fixture": "REPLACE_ME/一节真实课堂录音.wav",
+    "speed": 20,
+    "frame_ms": 20,
+    "emit_silence": true,
+    "vad": { "rms_open": 500, "rms_close": 300, "hangover_ms": 350, "min_speech_ms": 250 },
+    "note": "回放示例：没有麦克风也能验同一条链路（CI 就这么测 VAD）。把 emit_silence 打开可以看到静音段被标成 silent=true。",
+    "tuning": "现场调门限：先跑一节课，看 events.ndjson 里 audio.chunk 的 rms/peak 与 session.close 的 dropped_short——全是碎段就抬高 rms_open 或加长 hangover_ms，一段都没有就降低 rms_open 或查麦克风增益。"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "a-audio",
+  "argv": ["$TARGET_DIR/a-audio"],
+  "cwd": ".",
+  "enabled": false,
+  "platforms": ["windows", "linux"],
+  "params": {
+    "source": "device",
+    "sample_rate": 16000,
+    "frame_ms": 20,
+    "emit_silence": false,
+    "vad": {
+      "rms_open": 500,
+      "rms_close": 300,
+      "hangover_ms": 350,
+      "preroll_ms": 120,
+      "min_speech_ms": 250,
+      "max_segment_ms": 8000
+    }
+  }
+}
