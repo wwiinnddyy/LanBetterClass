@@ -55,7 +55,7 @@ pub fn open(tx: Sender<Vec<i16>>) -> Result<Captured, String> {
     let stream = match format.as_str() {
         "I16" => build::<i16>(&device, cfg, |s| *s, tx)?,
         "F32" => build::<f32>(&device, cfg, |s| (s * 32_767.0).clamp(-32_768.0, 32_767.0) as i16, tx)?,
-        "U16" => build::<u16>(&device, cfg, |s| (s as i32 - 32_768) as i16, tx)?,
+        "U16" => build::<u16>(&device, cfg, |s| (*s as i32 - 32_768) as i16, tx)?,
         other => return Err(format!("暂不支持设备采样格式 {other}（只支持 I16/F32/U16）")),
     };
     Ok(Captured { _stream: stream, sample_rate, channels, format, device: device_name })

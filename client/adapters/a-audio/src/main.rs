@@ -277,7 +277,11 @@ impl Session {
         }
         let want = self.frames.frame_samples(self.rate, 1);
         let alive = self.src.fill(&mut self.frames, want, self.rate);
-        while let Some(frame) = self.frames.take(want) {
+        // 写成 loop + match，不写 while let：`self.frames.take()` 的 &mut 借用会贯穿
+        // 整个循环体，而体内又要 &mut self 去推 VAD 与发事件，两者直接冲突。
+        loop {
+            let frame = self.frames.take(want);
+            let Some(frame) = frame else { break };
             if let Some(seg) = self.vad.push(&frame) {
                 self.emit(out, seq, seg);
             }
