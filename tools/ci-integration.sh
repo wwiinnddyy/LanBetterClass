@@ -18,14 +18,14 @@ WORK=${INTEG_DIR:-.ci-integ}
 DATA=$WORK/data
 ADP=$WORK/adapters
 SRV=$WORK/server-data
-LOG=$WORK/core.log
+LOG=$WORK/client.log
 LESSON=L-demo-0001
 PORT=${PORT:-8899}
 TOKEN=ci-secret-token
 
-CORE="$BIN/classagent-client$EXE"
+CLIENT="$BIN/classagent-client$EXE"
 SERVER="$BIN/classagent-server$EXE"
-[ -f "$CORE" ]   || { echo "FAIL 找不到 $CORE"; exit 1; }
+[ -f "$CLIENT" ] || { echo "FAIL 找不到 $CLIENT"; exit 1; }
 [ -f "$SERVER" ] || { echo "FAIL 找不到 $SERVER"; exit 1; }
 
 rm -rf "$WORK"
@@ -51,27 +51,27 @@ for _ in $(seq 1 40); do
 done
 
 # 采集 + 导出一节课
-"$CORE" run --data "$DATA" --adapters "$ADP" --lesson examples/lesson.demo.json --max-seconds 8 \
+"$CLIENT" run --data "$DATA" --adapters "$ADP" --lesson examples/lesson.demo.json --max-seconds 8 \
   < /dev/null > "$LOG" 2>&1 || true
-"$CORE" export --data "$DATA" --lesson "$LESSON" > "$WORK/export.log" 2>&1 \
+"$CLIENT" export --data "$DATA" --lesson "$LESSON" > "$WORK/export.log" 2>&1 \
   || { echo "FAIL export 失败"; tail -20 "$LOG"; exit 1; }
 
 code() { curl -s --path-as-is -o "$2" -w '%{http_code}' "$1"; }   # code <url> <outfile>
 
 # ① 真实 push（客户端 → 服务端），带正确 token
 set +e
-"$CORE" push --data "$DATA" --lesson "$LESSON" --server "127.0.0.1:$PORT" --token "$TOKEN" \
+"$CLIENT" push --data "$DATA" --lesson "$LESSON" --server "127.0.0.1:$PORT" --token "$TOKEN" \
   > "$WORK/push1.log" 2>&1
 PUSH1_RC=$?
 set -e
 
 # ② 再 push 一次：应幂等（deduped）
-"$CORE" push --data "$DATA" --lesson "$LESSON" --server "127.0.0.1:$PORT" --token "$TOKEN" \
+"$CLIENT" push --data "$DATA" --lesson "$LESSON" --server "127.0.0.1:$PORT" --token "$TOKEN" \
   > "$WORK/push2.log" 2>&1 || true
 
 # ③ 错误 token 的 push：客户端应非零退出
 set +e
-"$CORE" push --data "$DATA" --lesson "$LESSON" --server "127.0.0.1:$PORT" --token WRONG \
+"$CLIENT" push --data "$DATA" --lesson "$LESSON" --server "127.0.0.1:$PORT" --token WRONG \
   > "$WORK/pushbad.log" 2>&1
 PUSHBAD_RC=$?
 set -e

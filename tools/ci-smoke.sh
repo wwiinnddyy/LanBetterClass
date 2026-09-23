@@ -29,13 +29,13 @@ DATA=$WORK/data
 ADP=$WORK/adapters
 TONE=$WORK/tone.raw
 LESSON=L-demo-0001
-LOG=$WORK/core.log
+LOG=$WORK/client.log
 MAX_SECONDS=${MAX_SECONDS:-20}
 
 rm -rf "$WORK"
 mkdir -p "$ADP" "$DATA"
-CORE="$BIN/classagent-client$EXE"
-[ -f "$CORE" ] || { echo "FAIL 找不到 $CORE"; exit 1; }
+CLIENT="$BIN/classagent-client$EXE"
+[ -f "$CLIENT" ] || { echo "FAIL 找不到 $CLIENT"; exit 1; }
 
 # 300 秒 16kHz 单声道 s16le 正弦波。故意长到能在 1 秒墙钟内灌完，
 # 好把 a-audiofile 的 60 事件/秒预算真的顶穿。
@@ -63,17 +63,17 @@ json.dump(af, open(f'{adp}/a-audiofile.adapter.json', 'w', encoding='utf-8'), en
 PY
 
 set +e
-"$CORE" run --data "$DATA" --adapters "$ADP" --lesson examples/lesson.demo.json --max-seconds "$MAX_SECONDS" \
+"$CLIENT" run --data "$DATA" --adapters "$ADP" --lesson examples/lesson.demo.json --max-seconds "$MAX_SECONDS" \
   < /dev/null > "$LOG" 2>&1
 RC=$?
 set -e
-echo "--- core 日志尾部 ---"
+echo "--- client 日志尾部 ---"
 tail -25 "$LOG"
-[ "$RC" = 0 ] || { echo "FAIL core 退出码 $RC"; exit 1; }
+[ "$RC" = 0 ] || { echo "FAIL client 退出码 $RC"; exit 1; }
 grep -q '退避后重启' "$LOG" || { echo "FAIL 没有观察到适配器重启（Windows 侧 spawn/管道未验证过的话就是这里）"; exit 1; }
 
-"$CORE" export --data "$DATA" --lesson "$LESSON" || { echo "FAIL 导出失败"; exit 1; }
-"$CORE" status --data "$DATA"
+"$CLIENT" export --data "$DATA" --lesson "$LESSON" || { echo "FAIL 导出失败"; exit 1; }
+"$CLIENT" status --data "$DATA"
 
 python3 - "$DATA" "$LESSON" <<'PY'
 import json, os, sys

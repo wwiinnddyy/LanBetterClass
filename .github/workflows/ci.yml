@@ -37,7 +37,7 @@ jobs:
 
       # 端到端守卫，两个平台各跑一遍同一份脚本：Windows 侧的子进程 spawn、管道、
       # CRLF、$TARGET_DIR 补 .exe 这些行为只有真 Windows runner 能证。
-      - name: smoke (core + adapters)
+      - name: smoke (client + adapters)
         shell: bash
         run: bash tools/ci-smoke.sh
 
