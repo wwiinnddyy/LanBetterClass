@@ -88,10 +88,11 @@ pub fn open(tx: Sender<Vec<i16>>) -> Result<Captured, String> {
     let tx = Arc::new(tx);
 
     // 采样格式由设备决定，逐个单态化转换；认不出的格式直接拒，不做"大概是 PCM"的猜测。
+    // 类型参数写死而不让编译器从闭包反推：闭包形参的类型在推断顺序上救不了 T。
     let stream = match format.as_str() {
-        "I16" => build(&device, cfg, &tx, &errors, |s| *s)?,
-        "F32" => build(&device, cfg, &tx, &errors, |s| (s * 32_767.0).clamp(-32_768.0, 32_767.0) as i16)?,
-        "U16" => build(&device, cfg, &tx, &errors, |s| (*s as i32 - 32_768) as i16)?,
+        "I16" => build::<i16>(&device, cfg, &tx, &errors, |s| *s)?,
+        "F32" => build::<f32>(&device, cfg, &tx, &errors, |s| (s * 32_767.0).clamp(-32_768.0, 32_767.0) as i16)?,
+        "U16" => build::<u16>(&device, cfg, &tx, &errors, |s| (*s as i32 - 32_768) as i16)?,
         other => return Err(format!("暂不支持设备采样格式 {other}（只支持 I16/F32/U16）")),
     };
     Ok(Captured { _stream: stream, sample_rate, channels, format, device: device_name, errors })
