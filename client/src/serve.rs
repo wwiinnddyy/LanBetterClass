@@ -392,18 +392,27 @@ fn merge_decl_into(text: &str, merged: &Value) -> Result<(String, Option<bool>, 
 /// 必须是深合并：调参界面只想提交 `params.vad.rms_open` 一个数，浅赋值会把同级的
 /// `source`/`fixture` 与 `tuning` 这类指引位一并抹掉——那是别人的配置。
 fn deep_merge(dst: &mut Value, src: &Value) {
-    match (dst, src) {
-        (Value::Object(d), Value::Object(s)) => {
-            for (k, v) in s {
-                match d.get_mut(k) {
-                    Some(existing) if existing.is_object() && v.is_object() => deep_merge(existing, v),
-                    _ => {
-                        d.insert(k.clone(), v.clone());
-                    }
+    if !(dst.is_object() && src.is_object()) {
+        // 任一侧不是对象就没有"合并"可言：标量与数组整块换掉。
+        *dst = src.clone();
+        return;
+    }
+    // 先把顶层拷一份：直接在传入的 `&Value` 上边遍历边写 dst，借用检查器会拒掉；
+    // 声明文件的顶层只有一十几个键，这次拷贝不值一提。
+    let src_map = src.as_object().cloned().unwrap_or_default();
+    if let Value::Object(dst_map) = dst {
+        for (k, v) in src_map {
+            // 先探一下旧值：两边都是对象才递归，否则整块替。分两步写而不放进一个
+            // match，是因为 `get_mut` 的借用会覆盖整个 match，另一个分支里就 insert 不了。
+            let deeper = matches!(dst_map.get(&k), Some(cur) if cur.is_object() && v.is_object());
+            if deeper {
+                if let Some(existing) = dst_map.get_mut(&k) {
+                    deep_merge(existing, &v);
                 }
+            } else {
+                dst_map.insert(k, v);
             }
         }
-        _ => *dst = src.clone(),
     }
 }
 

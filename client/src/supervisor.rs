@@ -455,7 +455,7 @@ mod tests {
     /// “改门限 → 下节课生效”整条链的第一步：重读必须只拿 params。
     #[test]
     fn reload_picks_up_params_but_never_argv() {
-        let dir = std::env::temp_dir().join(format!("ca-sup-{}-{}", std::process::id(), file!()));
+        let dir = std::env::temp_dir().join(format!("ca-sup-reload-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a-x.adapter.json");
         std::fs::write(
