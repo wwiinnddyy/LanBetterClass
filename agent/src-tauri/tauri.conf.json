@@ -9,7 +9,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "agemt · 课堂观察端",
+        "title": "Agent · 课堂观察端",
         "width": 1160,
         "height": 780,
         "minWidth": 860,
