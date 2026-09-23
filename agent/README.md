@@ -35,3 +35,7 @@ classagent-server --listen 127.0.0.1:8790 --data server-data
 cargo install tauri-cli --version "^2"
 cd agent/src-tauri && cargo tauri dev
 ```
+
+两端二进制取自 CI 产物（不在本地构建）：`gh run download <RUN_ID> --name bins-windows-latest --dir try`。
+不想手敲：`try\体验-三端联动.bat` 一把跑完 ①→② 链路 —— 起服务端 → 采集一节课 → push →
+再 push 验去重 → 起客户端 serve，两端就位后再开观察端即可。
