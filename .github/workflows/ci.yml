@@ -37,6 +37,11 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      # 整个 workspace 之前只靠 agent.yml 对 agent/ 做格式检查，client/server 这侧从没查过：
+      # 手改代码不会坏构建，但会一路漂。只上闸不自动改，免得某天发现一整片被重排。
+      - name: fmt --check
+        run: cargo fmt --all --check
+
       - name: build
         run: cargo build --workspace --all-targets --message-format=short
 
@@ -74,3 +79,31 @@ jobs:
             target/debug/a-audiofile*
             target/debug/a-audio*
           if-no-files-found: warn
+
+  # 只跑构建不跑测试：脚本守卫在 build job 里已经跑过了，这里要的是另一个 profile。
+  # 发出去的产物一直是 debug，release 下的常量折叠/饱和算术/panic=abort 这类差异从没被编译过；
+  # 而「debug 过 release 红」的代码（依赖整数溢出、忘记取余的索引）到打包那天才爆就太晚了。
+  release:
+    name: release build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-release
+
+      - name: build --release
+        run: cargo build --release --workspace --all-targets --message-format=short
