@@ -304,13 +304,17 @@ fn print_status(store: &Store, sup: &Supervisor) {
         hhmmss(classagent_schema::utc_ms())
     );
     for (id, st) in store.stats() {
-        let status = sup.find(&id).map(|h| format!("{:?}", h.status)).unwrap_or_else(|| "未装载".into());
+        // "core" 是核心自己的 seq 空间（admit / respawn 标记），不是子进程，没有句柄。
+        let status = match id.as_str() {
+            "core" => "自身".to_string(),
+            _ => sup.find(&id).map(|h| format!("{:?}", h.status)).unwrap_or_else(|| "未装载".into()),
+        };
         let note = sup.find(&id).and_then(|h| h.note.clone()).unwrap_or_default();
         println!(
-            "  {id:<16} {status:<9} ev={:<8} {:>7} 缺口={} 超预算={} {}",
+            "  {id:<16} {status:<9} ev={:<8} {:>7} 丢失={} 超预算={} {}",
             st.events,
             human_bytes(st.bytes),
-            st.gaps,
+            st.lost_events,
             st.exceeded,
             note
         );

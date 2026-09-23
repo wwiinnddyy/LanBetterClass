@@ -16,18 +16,23 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT) EXE=.exe ;;
   *) EXE= ;;
 esac
+# Windows 上 Python 的 stdout 默认按本地代码页（cp1252）编码，中文输出会直接
+# UnicodeEncodeError。这是工装的编码问题，不是采集端的——Rust 侧写的是 UTF-8。
+export PYTHONIOENCODING=utf-8
 echo "platform=$(uname -s)  exe='${EXE:-无}'"
 
 BIN=${BIN:-target/debug}
-TMP=${TMP:-.ci-tmp}
-DATA=$TMP/data
-ADP=$TMP/adapters
-TONE=$TMP/tone.raw
+# 不要叫 TMP：它是标准环境变量，runner 上是 Temp 目录，`${TMP:-.ci-tmp}` 会被它
+# 覆盖，产物就悄悄跑到仓库外面去了。
+WORK=${SMOKE_DIR:-.ci-tmp}
+DATA=$WORK/data
+ADP=$WORK/adapters
+TONE=$WORK/tone.raw
 LESSON=L-demo-0001
-LOG=$TMP/core.log
+LOG=$WORK/core.log
 MAX_SECONDS=${MAX_SECONDS:-20}
 
-rm -rf "$TMP"
+rm -rf "$WORK"
 mkdir -p "$ADP" "$DATA"
 CORE="$BIN/classagent-core$EXE"
 [ -f "$CORE" ] || { echo "FAIL 找不到 $CORE"; exit 1; }

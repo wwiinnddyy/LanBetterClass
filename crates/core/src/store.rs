@@ -39,7 +39,7 @@ struct Rate {
     total_events: u64,
     total_bytes: u64,
     exceeded: u64,
-    gaps: u64,
+    lost: u64,
 }
 
 impl Default for Rate {
@@ -51,7 +51,7 @@ impl Default for Rate {
             total_events: 0,
             total_bytes: 0,
             exceeded: 0,
-            gaps: 0,
+            lost: 0,
         }
     }
 }
@@ -69,7 +69,8 @@ pub struct AdapterStat {
     pub events: u64,
     pub bytes: u64,
     pub exceeded: u64,
-    pub gaps: u64,
+    /// 因 seq 跳号而确认丢失的条数（不是跳号次数——次数在导出的健康表里另有 `gaps`）。
+    pub lost_events: u64,
 }
 
 impl Store {
@@ -245,7 +246,7 @@ impl Store {
                 r.exceeded += 1;
             }
             if let Some(g) = gap {
-                r.gaps += g;
+                r.lost += g;
             }
         }
 
@@ -310,7 +311,7 @@ impl Store {
             .map(|(id, r)| {
                 (
                     id.clone(),
-                    AdapterStat { events: r.total_events, bytes: r.total_bytes, exceeded: r.exceeded, gaps: r.gaps },
+                    AdapterStat { events: r.total_events, bytes: r.total_bytes, exceeded: r.exceeded, lost_events: r.lost },
                 )
             })
             .collect();
