@@ -54,7 +54,7 @@ fn main() {
             budget: Budget { max_events_per_s: 30, max_bytes_per_s: 400_000, on_exceed: Exceed::Log },
             restart: RestartPolicy { max_retries: 2, backoff_ms: 2_000 },
             notes: vec![
-                "需要音频输入设备。无设备/未授权时整节不产出（核心会把它标成 silent），stderr 给出原因与可选设备清单"
+                "需要音频输入设备。无设备/未授权时整节不产出：这个源不会出现在导出的健康表里，stderr 给出原因与可选设备清单"
                     .into(),
                 "blob 是单声道 PCM/WAV，未做 Opus：16 kHz 约 1.9 MB/分钟".into(),
                 "params.fixture 指向 wav 时改走回放路径，供 CI 与无声卡环境验证同一条链路".into(),
@@ -206,8 +206,8 @@ struct Session {
     done: bool,
     closed: bool,
     /// session.open 到底有没有发出去。没开过场就不收场：
-    /// 只要发了一条事件，核心的健康表就不会把这个源标成 silent，
-    /// 而"声明了却没产出"恰恰是现场最先要看的那个信号。
+    /// 只要发了一条事件，这个源就会带着“已工作”的计数出现在导出里，
+    /// 而“压根没跑起来”与“跑了但没采到”就被混成一回事了。
     opened: bool,
 }
 
@@ -247,8 +247,8 @@ impl Session {
             opened: false,
         };
         if s.failed.is_some() {
-            // 刻意不发 session.open：声明了 produces 却零事件，核心的健康表就会把它标成 silent。
-            // "这个源今天没干活"必须被看见，而不是被一条开场事件盖过去。
+            // 刻意不发 session.open：健康表是按“有事件的源”建键的，一个全程没发事件的源
+            // 会直接从表里缺席——“这个源今天没干活”必须看得见，而不是被一条开场事件盖过去。
             eprintln!("[{ID}] 无法开始采集：{}", s.failed.as_ref().unwrap());
             s.done = true;
             return s;
@@ -352,8 +352,8 @@ impl Session {
         }
         self.closed = true;
         if !self.opened {
-            // 没开过场的会话不收场，也不写任何事件：让核心的 silent 把"本机没麦克风"这类
-            // 情况原样暴露给导出与看板。
+            // 没开过场的会话不收场，也不写任何事件：让“本机没麦克风”这类情况
+            // 以“这个源不在健康表里”的形式原样暴露给导出与看板。
             return;
         }
         let wall_ms = self.started.elapsed().as_millis() as u64;

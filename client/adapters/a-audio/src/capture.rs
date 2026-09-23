@@ -8,8 +8,8 @@
 //! - 跟随设备原生采样率，不偷偷重采样——真实采样率随每个分段上报。宁可让下游知道
 //!   "这是 48k"，也不要拿一段假装 16k 的音频去转写；params 里的 sample_rate 只是偏好，
 //!   与设备不一致时会在 session.open 里明说。
-//! - 没有输入设备时明确报错并保持不产出，让核心的 `sources.silent` 把它暴露出来，
-//!   而不是造一条"看起来在工作"的假流。
+//! - 没有输入设备时明确报错并保持不产出：宁可这个源从导出的健康表里整个缺席，
+//!   也不要造一条"看起来在工作"的假流。
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{InputCallbackInfo, Stream, StreamConfig};

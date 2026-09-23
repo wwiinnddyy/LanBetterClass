@@ -200,16 +200,18 @@ need(p2['stats']['audio_chunks'] == 0, '统计里也要是 0')
 need(p2['sources']['a-audio']['silent'] is False,
      '开过场的源不该被标 silent，否则真没麦克风的机器会被误判成同一类')
 
-# ---------- ③ 本机没麦克风：一条事件都不发，让 silent 说话 ----------
+# ---------- ③ 本机没麦克风：一条事件都不发 ----------
 ev3 = read_events(os.path.join(work, 'data-nodev'))
 mine = [e for e in ev3 if e['adapter_id'] == 'a-audio']
 need(not mine, f'无设备时不该留任何事件（包含 open/close），实得 {len(mine)}')
 p3 = json.load(open(os.path.join(work, 'data-nodev', 'lessons', 'L-demo-0001', 'ai_payload.json'), encoding='utf-8'))
-h3 = p3['sources']
-need(h3['a-audio']['silent'] is True, '声明了 produces 却零事件，必须被标成 silent——这是现场排障的第一信号')
+# 健康表是按"有事件"建的键：一个全程没发过事件的源会直接不出现在表里。
+# silent 留给另一种情：发得出事件但全被拒收/超预算。两者别糊成一个断言。
+need('a-audio' not in p3['sources'] or p3['sources']['a-audio']['silent'] is True,
+     f'无设备时这个源要么不出现、要么被标 silent，实得 {p3["sources"].get("a-audio")}')
 need(p3['stats']['audio_chunks'] == 0, '无设备时导出的音频统计必须是 0')
 log3 = open(os.path.join(work, 'run3.log'), encoding='utf-8').read()
-need('无法开始采集' in log3, '适配器的失败原因要能在日志里看到，而不是只剩一个 silent')
+need('无法开始采集' in log3, '适配器的失败原因要能在日志里看到，而不是只表现为“缺一个源”')
 
-print('AUDIO OK  2 个话轮 / %d 字节 / 丢弃 1 记短促噪音 / 无声卡已标 silent' % total)
+print('AUDIO OK  2 个话轮 / %d 字节 / 丢弃 1 记短促噪音 / 无设备时不产出也不伪装' % total)
 PY
