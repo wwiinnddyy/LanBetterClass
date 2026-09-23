@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/schema", "crates/core", "adapters/a-fake", "adapters/a-audiofile"]
+members = ["crates/schema", "crates/core", "crates/server", "adapters/a-fake", "adapters/a-audiofile"]
 
 [workspace.package]
 version = "0.1.0"

@@ -41,6 +41,11 @@ jobs:
         shell: bash
         run: bash tools/ci-smoke.sh
 
+      # 客户端 → 远程服务端的 HTTP 链路：真实 push、落盘去重、AI 请求单、鉴权、路径穿越。
+      - name: integration (client -> server)
+        shell: bash
+        run: bash tools/ci-integration.sh
+
       - name: strip linker junk
         shell: bash
         run: rm -f target/debug/*.d
@@ -51,6 +56,7 @@ jobs:
           name: bins-${{ matrix.os }}
           path: |
             target/debug/classagent-core*
+            target/debug/classagent-server*
             target/debug/a-fake*
             target/debug/a-audiofile*
           if-no-files-found: warn

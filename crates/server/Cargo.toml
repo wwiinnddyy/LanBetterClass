@@ -1,0 +1,16 @@
+[package]
+name = "classagent-server"
+description = "远程服务端：接收采集客户端推来的 ai_payload，落盘去重，并生成交给 AI 的请求单"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "classagent-server"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+classagent-schema.workspace = true
+tiny_http.workspace = true

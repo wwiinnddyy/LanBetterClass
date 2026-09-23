@@ -373,3 +373,47 @@ pub fn resolve_argv(argv: &[String]) -> Vec<String> {
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// 客户端 → 服务端：一节课的上传契约
+//
+// 与采集侧的 Envelope 分开，互不枚举——服务端只认"能喂 AI 的载荷"，
+// 原始 events/blobs 仍留在采集端本机。这条边界就是"客户端/服务端分离"的接缝。
+// ---------------------------------------------------------------------------
+
+/// 客户端把一节课折叠后的 AI 载荷（`timeline::build` 的产物）推给远程服务端。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LessonUpload {
+    pub proto: u8,
+    pub lesson_id: String,
+    pub uploaded_at_utc_ms: u64,
+    /// 采集端自述，例如 "classagent-core 0.1.0"。
+    pub source: String,
+    /// `AiPayload` 的 JSON 形态。服务端不重解析其内部结构，只透传与落盘。
+    pub ai_payload: serde_json::Value,
+}
+
+/// 服务端对一次上传的确认。`deduped` 让客户端知道这是重投（幂等，不重复落盘）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestAck {
+    pub ok: bool,
+    pub proto: u8,
+    pub lesson_id: String,
+    /// 本次是否真的写了盘（新内容或有变化）。
+    pub stored: bool,
+    /// 内容与已存副本逐字节相同 → 幂等重投。
+    pub deduped: bool,
+    pub received_at_utc_ms: u64,
+    /// 生成的"交给 AI"请求单路径（服务端到此为止，真正的模型调用在下游）。
+    pub ai_request: String,
+}
+
+/// 路径片段白名单：lesson id / 文件名过它，禁 `/` `\` `..` NUL 与绝对路径。
+/// 采集端本地看板与远程服务端共用同一把尺子。
+pub fn safe_component(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() < 128
+        && s != "."
+        && s != ".."
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}

@@ -1,6 +1,8 @@
 /target
 /data
 /.ci-tmp
+/.ci-integ
+/.ci-artifacts
 /try
 *.pdb
 *.exe

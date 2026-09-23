@@ -4,9 +4,9 @@
 //! AI 能消费的 `ai_payload.json`。平台差异（DXGI / PipeWire / WASAPI）一律关在
 //! 适配器里，所以新增一个学校环境不需要重编译这里。
 
-use classagent_core::{digest, protocol, serve, store, supervisor, timeline};
+use classagent_core::{digest, protocol, push, serve, store, supervisor, timeline};
 
-use classagent_schema::{kinds, Admit, Command, Envelope, LessonInfo, PROTO};
+use classagent_schema::{kinds, Admit, Command, Envelope, LessonInfo, LessonUpload, PROTO};
 use protocol::shorten;
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -28,6 +28,7 @@ fn main() {
         "export" => export(opts, data),
         "digest" => digest_cmd(opts, data),
         "serve" => serve_cmd(opts, data),
+        "push" => push_cmd(opts, data),
         other => {
             eprintln!("未知命令 {other}\n用法：classagent-core [run|status|export|digest|serve] [--data DIR] [--adapters DIR]");
             eprintln!("  run    --lesson FILE.json  启动即开课；控制台可输入 start/stop/status/quit");
@@ -37,6 +38,8 @@ fn main() {
             eprintln!("  serve  [--host 127.0.0.1] [--port 8786] [--allow-write]");
             eprintln!("         本地看板：/ 是页面，/api/lesson/ID/digest、/stats、/blob/名字 是数据。");
             eprintln!("         默认只绑本机；只有 --allow-write 才接受改数据源开关的 POST。");
+            eprintln!("  push   --lesson ID --server HOST:PORT [--token SECRET] [--path /api/ingest]");
+            eprintln!("         把导出的 ai_payload 通过 HTTP POST 推给远程 classagent-server。");
             Ok(())
         }
     };
@@ -496,4 +499,61 @@ fn serve_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     let allow_write = opts.flag("allow-write");
     std::fs::create_dir_all(&data)?;
     serve::run(serve::Config { data, adapters, listen: format!("{host}:{port}"), allow_write })
+}
+
+/// 客户端 → 服务端：读一节课，折叠成 ai_payload，HTTP POST 推给 classagent-server。
+/// 只推折叠后的载荷，不推原始 events/blobs——原始证据留在采集端本机。
+fn push_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
+    let id = match opts.val("lesson") {
+        Some(v) => v.to_string(),
+        None => {
+            eprintln!("push 需要 --lesson ID");
+            std::process::exit(2);
+        }
+    };
+    let server = match opts.val("server") {
+        Some(v) => v.to_string(),
+        None => {
+            eprintln!("push 需要 --server HOST:PORT");
+            std::process::exit(2);
+        }
+    };
+    let token = opts.val("token").map(|s| s.to_string());
+    let path = opts.val("path").unwrap_or("/api/ingest").to_string();
+
+    // 优先推已导出的 ai_payload.json（字节稳定，重投才谈得上幂等）；
+    // 没有就先在内存里折叠一份（不落盘，不污染 export 的产物）。
+    let payload_path = data.join("lessons").join(&id).join("ai_payload.json");
+    let ai_payload: serde_json::Value = if payload_path.exists() {
+        serde_json::from_slice(&std::fs::read(&payload_path)?)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+    } else {
+        let meta = match store::read_meta(&data, &id)? {
+            Some(m) => m,
+            None => {
+                eprintln!("{id} 既无 ai_payload.json 也无 meta.json，无法推送");
+                std::process::exit(2);
+            }
+        };
+        let (records, _bad) = store::read_records(&data, &id)?;
+        let payload = timeline::build(&meta, &records);
+        serde_json::to_value(&payload).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+    };
+
+    let upload = LessonUpload {
+        proto: PROTO,
+        lesson_id: id.clone(),
+        uploaded_at_utc_ms: classagent_schema::utc_ms(),
+        source: format!("classagent-core {}", env!("CARGO_PKG_VERSION")),
+        ai_payload,
+    };
+    let body = serde_json::to_vec(&upload).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    let (code, resp) = push::post_json(&server, &path, &body, token.as_deref())?;
+    println!("[push] {id} → {server}{path}  {} 字节  HTTP {code}", body.len());
+    println!("{resp}");
+    if !(200..=299).contains(&code) {
+        return Err(std::io::Error::other(format!("服务端返回 HTTP {code}")));
+    }
+    Ok(())
 }
