@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>课堂观察 · 看板</title>
+<style>
+  /* 不引任何 CDN：一体机可能没有外网。全部走系统字体。 */
+  :root{
+    --bg:#0d1014; --panel:#14181f; --panel2:#1a1f28; --line:#252c38;
+    --fg:#e6e9ef; --dim:#8b94a6; --acc:#7aa2f7; --ok:#9ece6a; --warn:#e0af68; --bad:#f7768e;
+    --r:8px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  a{color:var(--acc)}
+  header{display:flex;gap:14px;align-items:baseline;padding:14px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.02em}
+  header .meta{color:var(--dim);font-size:12px}
+  .badge{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .badge.ro{color:var(--warn);border-color:#4a3c1c}
+  .badge.rw{color:var(--ok);border-color:#2b4526}
+  .live{width:7px;height:7px;border-radius:99px;background:var(--dim);display:inline-block}
+  .live.on{background:var(--ok);box-shadow:0 0 0 3px #25401f;animation:p 1.6s infinite}
+  @keyframes p{50%{opacity:.35}}
+  main{display:grid;grid-template-columns:260px 1fr;gap:0;min-height:calc(100vh - 57px)}
+  nav{border-right:1px solid var(--line);padding:10px;overflow:auto;max-height:calc(100vh - 57px)}
+  nav h2{font-size:11px;text-transform:uppercase;color:var(--dim);margin:8px 6px 6px;letter-spacing:.08em}
+  .les{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:var(--r);padding:8px 10px;color:inherit;cursor:pointer;margin-bottom:4px;font:inherit}
+  .les:hover{background:var(--panel)}
+  .les.sel{background:var(--panel2);border-color:var(--line)}
+  .les b{font-weight:600;display:block;font-size:13px}
+  .les span{color:var(--dim);font-size:11px}
+  section{padding:16px 20px;overflow:auto;max-height:calc(100vh - 57px)}
+  .tabs{display:flex;gap:4px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:5px 12px;font-size:13px;color:var(--dim);cursor:pointer;font-family:inherit}
+  .tab.on{color:var(--fg);border-color:#39486a;background:var(--panel2)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:10px;margin-bottom:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px 12px}
+  .card i{font-style:normal;color:var(--dim);font-size:11px;display:block}
+  .card b{font-size:19px;font-weight:600;letter-spacing:-.01em}
+  .card u{text-decoration:none;color:var(--dim);font-size:11px}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;overflow:auto;font:12.5px/1.55 ui-monospace,"Cascadia Mono",Consolas,monospace;white-space:pre;color:#cfd6e4;max-width:100%}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .dim{color:var(--dim)}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  input[type=search],select{background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:var(--r);padding:5px 9px;font:inherit;font-size:13px}
+  .sw{width:34px;height:19px;border-radius:99px;background:#2c3444;border:1px solid var(--line);position:relative;cursor:pointer;flex:0 0 auto}
+  .sw.on{background:#2f5d3a;border-color:#3b7a4a}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:99px;background:#cfd6e4;transition:.15s}
+  .sw.on::after{left:16px}
+  .sw.off{cursor:not-allowed;opacity:.45}
+  .muted{color:var(--dim);font-size:12px}
+  .t{font-variant-numeric:tabular-nums;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>课堂观察 · 看板</h1>
+  <span class="meta" id="h-data">—</span>
+  <span class="badge" id="h-mode">—</span>
+  <span class="meta"><span class="live" id="h-live"></span> <span id="h-ago">—</span></span>
+  <span class="meta" style="margin-left:auto">
+    刷新 <select id="h-int"><option value="0">关</option><option value="2000">2 秒</option><option value="10000" selected>10 秒</option><option value="30000">30 秒</option></select>
+    <button class="tab" id="h-now">立即</button>
+  </span>
+</header>
+<main>
+  <nav><h2>课程</h2><div id="lessons" class="muted">载入中…</div></nav>
+  <section>
+    <div class="tabs" id="tabs"></div>
+    <div id="body"></div>
+  </section>
+</main>
+<script>
+const S = { lessons: [], sel: null, tab: 'digest', adapters: [], health: null };
+const TABS = [['digest','摘要'],['stats','统计'],['sources','采集健康'],['track','时间轴'],['settings','数据源'],['raw','原始载荷']];
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const $ = s => document.querySelector(s);
+async function j(u, opt){ const r = await fetch(u, opt); const t = await r.text(); if(!r.ok){ let m=t; try{ m=JSON.parse(t).error||t }catch(e){} throw new Error(m); } return t; }
+async function jo(u){ return JSON.parse(await j(u)); }
+function clock(ms){ const s=Math.floor(ms/1000); return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0'); }
+function stamp(ms){ const d=new Date(ms); const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+
+function renderTabs(){
+  $('#tabs').innerHTML = TABS.map(([k,label]) =>
+    `<button class="tab${S.tab===k?' on':''}" onclick="S.tab='${k}';drawTab()">${label}</button>`).join('');
+}
+function renderLessons(){
+  const el = $('#lessons');
+  if(!S.lessons.length){ el.innerHTML = '<div class="muted">还没有任何一节课。<br>跑一次 <code>体验-上一节课.bat</code>。</div>'; return; }
+  el.innerHTML = S.lessons.map(l => `
+    <button class="les${S.sel===l.lesson_id?' sel':''}" onclick="pick('${esc(l.lesson_id)}')">
+      <b>${esc(l.class||'?')} · ${esc(l.subject||'?')}</b>
+      <span>${stamp(l.started_at_utc_ms)}</span>
+      <span>${esc(l.stop_reason||'进行中')} · ${(l.events_bytes/1024).toFixed(0)}KB</span>
+    </button>`).join('');
+}
+async function pick(id){ S.sel = id; renderLessons(); await drawTab(); }
+
+async function drawTab(){
+  const b = $('#body');
+  if(!S.sel){ b.innerHTML = '<div class="muted">左边选一节课。</div>'; renderTabs(); return; }
+  renderTabs();
+  const id = S.sel;
+  try{
+    if(S.tab==='digest'){ b.innerHTML = `<pre>${esc(await j(`/api/lesson/${id}/digest`))}</pre>`; }
+    else if(S.tab==='raw'){
+      const t = await j(`/api/lesson/${id}`);
+      b.innerHTML = `<div class="row"><span class="muted">这就是交给云端模型的载荷本体（${(t.length/1024).toFixed(0)}KB）</span>
+        <button class="tab" onclick="navigator.clipboard.writeText(document.querySelector('#rawpre').textContent).then(()=>this.textContent='已复制')">复制</button></div>
+        <pre id="rawpre">${esc(t)}</pre>`;
+    }
+    else {
+      const p = JSON.parse(await j(`/api/lesson/${id}/stats`));
+      if(S.tab==='stats') b.innerHTML = viewStats(p);
+      else if(S.tab==='sources') b.innerHTML = viewSources(p);
+      else if(S.tab==='track'){
+        const full = await jo(`/api/lesson/${id}`);
+        window.__full = full.track;
+        b.innerHTML = viewTrack();
+        fillTrack();
+      }
+      else b.innerHTML = await viewSettings();
+    }
+  }catch(e){ b.innerHTML = `<div class="bad">取不到：${esc(e.message)}</div>`; }
+}
+
+function viewStats(p){
+  const s = p.stats, d = Math.max(s.duration_ms,1);
+  const card = (k,v,u='') => `<div class="card"><i>${k}</i><b>${v}</b>${u?` <u>${u}</u>`:''}</div>`;
+  return `<div class="cards">
+    ${card('课堂时长', clock(s.duration_ms))}
+    ${card('教师讲话', clock(s.teacher_ms), pct(s.teacher_ms,d))}
+    ${card('学生讲话', clock(s.student_ms), pct(s.student_ms,d))}
+    ${card('最长静默', clock(s.longest_silence_ms))}
+    ${card('板书笔数', s.strokes, `${clock(s.ink_time_ms)}`)}
+    ${card('边讲边写', clock(s.writing_while_speaking_ms), pct(s.writing_while_speaking_ms, Math.max(s.ink_time_ms,1)+' of 书写'))}
+    ${card('板面页数', s.pages_touched, `擦除 ${s.erases} 次`)}
+    ${card('音频分段', s.audio_chunks, mb(s.audio_bytes))}
+    ${card('屏幕关键帧', s.keyframes)}
+    ${card('评估记录', s.eval_records)}
+    ${card('时间轴条目', p.track_len)}
+  </div>
+  <div class="muted">“边讲边写”占书写总时长的比例是这套系统唯一别人拿不到的指标：纯录音系统看不到老师手上在画什么。</div>`;
+}
+function pct(a,b){ const v = a/Math.max(b,1)*100; return v.toFixed(0)+'%'; }
+function mb(n){ return n>1048576 ? (n/1048576).toFixed(1)+'MB' : (n/1024).toFixed(0)+'KB'; }
+
+function viewSources(p){
+  const rows = Object.entries(p.sources).sort((a,b)=>a[0]<b[0]?-1:1).map(([k,v]) => {
+    const bad = v.silent || v.rejected>0 || v.duplicates>0;
+    const warn = v.gaps>0 || v.over_budget>0 || v.restarts>0;
+    const cls = bad?'bad':(warn?'warn':'ok');
+    return `<tr>
+      <td>${esc(k)}</td>
+      <td class="num">${v.events}</td><td class="num">${v.accepted}</td>
+      <td class="num">${v.gaps}</td><td class="num">${v.lost_events}</td>
+      <td class="num">${v.restarts}</td><td class="num">${v.over_budget}</td>
+      <td class="num">${v.duplicates}</td><td class="num">${v.rejected}</td>
+      <td class="${cls}">${v.silent?'声明了却全程无事件':(bad?'有异常':(warn?'可接受，但要留意':'正常'))}</td>
+      <td class="dim">${esc((v.declared||[]).join(' '))}</td></tr>`;
+  }).join('');
+  const w = (p.warnings||[]).map(x=>`<div class="warn">！${esc(x)}</div>`).join('');
+  return `<div class="muted" style="margin-bottom:10px">缺口=丢了多少条上游事件；重启后仍算“重复”为 0 才对（seq 空间被正确重置）。</div>
+    <table><thead><tr><th>源</th><th class="num">收到</th><th class="num">收下</th><th class="num">缺口处</th><th class="num">丢失</th><th class="num">重启</th><th class="num">超预算</th><th class="num">重复</th><th class="num">解析失败</th><th>判断</th><th>声明产出</th></tr></thead>
+    <tbody>${rows||'<tr><td colspan=11 class=dim>没有事件</td></tr>'}</tbody></table>${w}`;
+}
+
+function viewTrack(){
+  const kinds = [...new Set(window.__full.map(i=>i.kind))].sort();
+  return `<div class="row">
+    <input type="search" id="fq" placeholder="搜索文本…" oninput="fillTrack()" style="min-width:220px">
+    <select id="fk" onchange="fillTrack()">
+      <option value="">全部类型</option>
+      ${kinds.map(k=>`<option value="${esc(k)}">${esc(k)}</option>`).join('')}
+    </select>
+    <span class="muted" id="fcnt"></span>
+  </div><pre id="tl" style="max-height:62vh"></pre>`;
+}
+function fillTrack(){
+  const el = $('#tl'); if(!el || !window.__full) return;
+  const q = ($('#fq')?.value||'').toLowerCase(), k = $('#fk')?.value||'';
+  const rows = window.__full.filter(i => (!k||i.kind===k) && (!q||String(i.text).toLowerCase().includes(q)));
+  const shown = rows.slice(0, 600);
+  el.textContent = '';
+  el.innerHTML = shown.map(i =>
+    `<span class="t">${clock(i.t0_ms)}</span> <span class="dim">${esc(i.kind.replace(/^(ink|asr|screen|courseware|audio|eval|core)\./,''))}</span>  ${esc(i.text)}`
+  ).join('\n') + (rows.length>shown.length ? `\n\n…还有 ${rows.length-shown.length} 条，缩小筛选再看` : '');
+  const c = $('#fcnt'); if(c) c.textContent = `${rows.length} 条，显示 ${shown.length} 条`;
+}
+
+async function viewSettings(){
+  const a = await jo('/api/adapters');
+  const rw = S.health?.allow_write;
+  const rows = a.map(x => `<tr>
+    <td>${esc(x.id||x.file)}</td>
+    <td class="dim">${esc((x.platforms||[]).join(','))}</td>
+    <td class="dim" style="white-space:normal">${esc(JSON.stringify(x.params||{}))}</td>
+    <td><span class="sw${x.enabled?' on':''}${rw?'':' off'}" onclick="setEnabled('${esc(x.file)}',${!x.enabled})"></span></td>
+    <td class="dim">${esc(x.error||'')}</td></tr>`).join('');
+  return `<div class="muted" style="margin-bottom:10px">
+      ${rw ? '写操作已开启：关掉某个源，核心下次启动该源时生效。' : '当前只读。要在这里开关数据源，用 <code>serve --allow-write</code> 启动。'}
+    </div>
+    <table><thead><tr><th>源</th><th>平台</th><th>参数</th><th>启用</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function setEnabled(file, enabled){
+  if(!S.health?.allow_write){ alert('只读模式：用 serve --allow-write 启动才能改'); return; }
+  try{
+    await j('/api/adapter/'+encodeURIComponent(file), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    await refresh(true);
+  }catch(e){ alert('失败：'+e.message); }
+}
+
+async function refresh(keepTab){
+  try{
+    S.health = await jo('/api/health');
+    $('#h-data').textContent = S.health.data_dir;
+    const badge = $('#h-mode');
+    badge.textContent = S.health.allow_write ? '可写 --allow-write' : '只读';
+    badge.className = 'badge ' + (S.health.allow_write?'rw':'ro');
+    const before = S.sel;
+    S.lessons = await jo('/api/lessons');
+    if(!keepTab || !S.lessons.some(l=>l.lesson_id===S.sel)) S.sel = S.lessons[0]?.lesson_id || null;
+    else S.sel = before;
+    renderLessons();
+    window.__full = null;
+    await drawTab();
+    $('#h-ago').textContent = '更新于 ' + new Date().toLocaleTimeString();
+    $('#h-live').className = 'live' + (S.lessons.some(l=>!l.stop_reason) ? ' on' : '');
+  }catch(e){ $('#lessons').innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
+}
+
+let timer = null;
+function arm(){ clearInterval(timer); const ms = +$('#h-int').value; if(ms) timer = setInterval(()=>refresh(true), ms); }
+$('#h-int').onchange = arm;
+$('#h-now').onclick = ()=>refresh(true);
+refresh(true).then(arm);
+</script>
+</body>
+</html>

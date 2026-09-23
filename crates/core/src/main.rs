@@ -4,7 +4,7 @@
 //! AI 能消费的 `ai_payload.json`。平台差异（DXGI / PipeWire / WASAPI）一律关在
 //! 适配器里，所以新增一个学校环境不需要重编译这里。
 
-use classagent_core::{digest, protocol, store, supervisor, timeline};
+use classagent_core::{digest, protocol, serve, store, supervisor, timeline};
 
 use classagent_schema::{kinds, Admit, Command, Envelope, LessonInfo, PROTO};
 use protocol::shorten;
@@ -27,12 +27,16 @@ fn main() {
         "status" => status(data),
         "export" => export(opts, data),
         "digest" => digest_cmd(opts, data),
+        "serve" => serve_cmd(opts, data),
         other => {
-            eprintln!("未知命令 {other}\n用法：classagent-core [run|status|export|digest] [--data DIR] [--adapters DIR]");
+            eprintln!("未知命令 {other}\n用法：classagent-core [run|status|export|digest|serve] [--data DIR] [--adapters DIR]");
             eprintln!("  run    --lesson FILE.json  启动即开课；控制台可输入 start/stop/status/quit");
             eprintln!("         --max-seconds N     N 秒后自动收尾退出（脚本化验证用）");
             eprintln!("  export --lesson ID [--out PATH]   导出 AI 载荷");
             eprintln!("  digest --lesson ID [--out PATH]   一节课的可读摘要（不接模型也能读）");
+            eprintln!("  serve  [--host 127.0.0.1] [--port 8786] [--allow-write]");
+            eprintln!("         本地看板：/ 是页面，/api/lesson/ID/{digest,stats,blob/N} 是数据。");
+            eprintln!("         默认只绑本机；只有 --allow-write 才接受改数据源开关的 POST。");
             Ok(())
         }
     };
@@ -56,6 +60,10 @@ impl Opts {
 
     fn num(&self, key: &str) -> Option<u64> {
         self.m.get(key).and_then(|v| v.parse().ok())
+    }
+
+    fn flag(&self, key: &str) -> bool {
+        self.m.contains_key(key)
     }
 }
 
@@ -469,4 +477,14 @@ fn digest_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
         None => print!("{text}"),
     }
     Ok(())
+}
+
+/// 本地看板服务。默认只绑 127.0.0.1，且只读。
+fn serve_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
+    let host = opts.val("host").unwrap_or("127.0.0.1");
+    let port = opts.num("port").unwrap_or(8786);
+    let adapters = PathBuf::from(opts.val("adapters").unwrap_or("adapters.d"));
+    let allow_write = opts.flag("allow-write");
+    std::fs::create_dir_all(&data)?;
+    serve::run(serve::Config { data, adapters, listen: format!("{host}:{port}"), allow_write })
 }

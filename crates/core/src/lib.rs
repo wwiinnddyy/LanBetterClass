@@ -5,6 +5,7 @@
 
 pub mod digest;
 pub mod protocol;
+pub mod serve;
 pub mod store;
 pub mod supervisor;
 pub mod timeline;

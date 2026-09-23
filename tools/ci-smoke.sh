@@ -168,3 +168,112 @@ if fails:
     sys.exit(1)
 print('DIGEST OK')
 PY
+
+# ---------------------------------------------------------------------------
+# 看板服务。这里不验"页面好不好看"，验的是接口与边界：
+# 路径穿越必须挡、只读模式必须拒写、blob 要按字节原样取回、开写后声明文件真被改。
+# ---------------------------------------------------------------------------
+PORT=${PORT:-8799}
+code() { curl -s --path-as-is -o "$2" -w '%{http_code}' "$1"; }   # code <url> <outfile>
+
+"$BIN/classagent-core" serve --data "$DATA" --adapters "$ADP" --port "$PORT" > "$WORK/serve.log" 2>&1 &
+SRV=$!
+trap 'kill $SRV 2>/dev/null || true' EXIT
+for _ in $(seq 1 40); do
+  curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break
+  sleep 0.25
+done
+
+HTML=$(code "http://127.0.0.1:$PORT/"                                   "$WORK/page.html")
+LESS=$(code "http://127.0.0.1:$PORT/api/lessons"                        "$WORK/lessons.json")
+STA=$(code "http://127.0.0.1:$PORT/api/lesson/L-demo-0001/stats"        "$WORK/stats.json")
+DIG=$(code "http://127.0.0.1:$PORT/api/lesson/L-demo-0001/digest"       "$WORK/digest2.txt")
+ADP_JSON=$(code "http://127.0.0.1:$PORT/api/adapters"                   "$WORK/adapters.json")
+MISS=$(code "http://127.0.0.1:$PORT/api/nope"                           "$WORK/nope.json")
+BLOB_NAME=$(basename "$(find "$DATA/lessons/L-demo-0001/blobs" -type f | head -1)")
+BLOB=$(code "http://127.0.0.1:$PORT/api/lesson/L-demo-0001/blob/$BLOB_NAME" "$WORK/blob.bin")
+# 四种类别的穿越尝试：编码斜杠、编码点、裸 ../（--path-as-is 阻止 curl 本地归一）、混合
+T1=$(code "http://127.0.0.1:$PORT/api/lesson/..%2F..%2Fetc%2Fpasswd/blob/x"  "$WORK/t1.json")
+T2=$(code "http://127.0.0.1:$PORT/api/lesson/L-demo-0001/blob/..%2Fmeta.json" "$WORK/t2.json")
+T3=$(code "http://127.0.0.1:$PORT/api/lesson/L-demo-0001/blob/../../meta.json" "$WORK/t3.json")
+T4=$(code "http://127.0.0.1:$PORT/api/lesson/L-demo-0001/blob/%2e%2e%2fmeta.json" "$WORK/t4.json")
+W1=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"enabled":false}' \
+     -o "$WORK/w1.json" -w '%{http_code}' "http://127.0.0.1:$PORT/api/adapter/a-fake.adapter.json")
+echo "--- serve 日志 ---"; cat "$WORK/serve.log"
+kill $SRV 2>/dev/null || true; trap - EXIT
+
+# 第二个实例：开写。改的是本次 CI 生成的声明副本，不动仓库。
+PORT2=$((PORT + 1))
+"$BIN/classagent-core" serve --data "$DATA" --adapters "$ADP" --port "$PORT2" --allow-write > "$WORK/serve2.log" 2>&1 &
+SRV2=$!
+trap 'kill $SRV2 2>/dev/null || true' EXIT
+for _ in $(seq 1 20); do
+  curl -fsS "http://127.0.0.1:$PORT2/api/health" >/dev/null 2>&1 && break
+  sleep 0.25
+done
+W2=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"enabled":false}' \
+     -o "$WORK/w2.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+W3=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"enabled":"yes"}' \
+     -o "$WORK/w3.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+W4=$(curl -s --path-as-is -X POST -H 'Content-Type: application/json' -d '{"enabled":true}' \
+     -o "$WORK/w4.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/../../Cargo.toml")
+kill $SRV2 2>/dev/null || true; trap - EXIT
+
+cat > "$WORK/codes.txt" <<EOF
+html=$HTML lessons=$LESS stats=$STA digest=$DIG adapters=$ADP_JSON missing=$MISS blob=$BLOB
+t1=$T1 t2=$T2 t3=$T3 t4=$T4 post_readonly=$W1 post_write=$W2 post_badbody=$W3 post_traversal=$W4
+EOF
+
+python3 - "$WORK" "$DATA" "$ADP" "$BLOB_NAME" <<'PY'
+import json, os, sys
+work, data, adp, blob_name = sys.argv[1:5]
+codes = dict(tok.split('=', 1) for tok in open(os.path.join(work, 'codes.txt'), encoding='utf-8').read().split() if '=' in tok)
+rd = lambda n: open(os.path.join(work, n), encoding='utf-8').read()
+size = lambda p: os.path.getsize(os.path.join(work, p))
+fails = []
+def need(c, m):
+    if not c: fails.append(m)
+
+print('== 服务实测 ==', json.dumps(codes, ensure_ascii=False))
+
+# 正常路径
+need(size('page.html') > 3000, '首页太小，前端可能没被 include_str! 编进二进制')
+need('课堂观察' in rd('page.html'), '首页缺标题')
+ls = json.loads(rd('lessons.json'))
+need(isinstance(ls, list) and len(ls) == 1, f'课程列表应 1 条，实际 {ls}')
+need(ls[0]['lesson_id'] == 'L-demo-0001' and ls[0]['class'] == '初二(3)班', '课程元信息（含中文）在 HTTP 链路上坏了')
+st = json.loads(rd('stats.json'))
+need(st['stats']['strokes'] > 300, 'stats 接口没有笔迹数')
+need('a-fake' in st['sources'], 'stats 接口缺源健康表')
+d2 = rd('digest2.txt')
+for sec in ('一、量的分布', '四、采集健康', '五、按本轮采集，以下结论不能下'):
+    need(sec in d2, f'digest 接口缺段：{sec}')
+ad = json.loads(rd('adapters.json'))
+need(any(a.get('id') == 'a-fake' and a.get('enabled') is True for a in ad), 'adapters 接口没报出 a-fake')
+blob_disk = os.path.join(data, 'lessons', 'L-demo-0001', 'blobs', blob_name)
+need(os.path.getsize(os.path.join(work, 'blob.bin')) == os.path.getsize(blob_disk) > 0,
+     'blob 取回字节数与磁盘不一致')
+for k in ('html', 'lessons', 'stats', 'digest', 'adapters', 'blob'):
+    need(codes.get(k) == '200', f'{k} 接口不是 200：{codes.get(k)}')
+
+# 边界
+need(codes['missing'] == '404', '未知接口应 404')
+for k in ('t1', 't2', 't3', 't4'):
+    need(codes[k] in ('400', '404'), f'路径穿越 {k} 没被挡（{codes[k]}）——这条最要命')
+    need('error' in json.loads(rd(f'{k}.json')), f'{k} 没有错误说明')
+need(codes['post_readonly'] == '403', '只读模式竟然接受了 POST')
+need('allow-write' in rd('w1.json'), '403 没告诉用户怎么开')
+need(codes['post_write'] == '200', '开写后 POST 失败')
+decl = json.loads(open(os.path.join(adp, 'a-fake.adapter.json'), encoding='utf-8').read())
+need(decl.get('enabled') is False, '声明文件里的 enabled 没被真的改写')
+need(decl.get('params', {}).get('crash_after_ticks') == 3000, '改写丢了其它字段')
+need(codes['post_badbody'] == '400', '非法 body 竟然通过')
+need(codes['post_traversal'] in ('400', '404'), f'写接口穿越没被挡（{codes["post_traversal"]}）')
+need(os.path.getsize(os.path.join('Cargo.toml')) > 100, 'Cargo.toml 被动过？')
+
+if fails:
+    print('SERVE FAIL')
+    for f in fails: print('  -', f)
+    sys.exit(1)
+print('SERVE OK')
+PY

@@ -11,6 +11,9 @@ license = "MIT"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 classagent-schema = { path = "crates/schema" }
+# 只用它起本地看板服务。选 tiny_http 而不是 axum/hyper：不引入 async 运行时，
+# 依赖树小得多，而这台机器的磁盘和内存都是约束。
+tiny_http = "0.12"
 
 # 这台机器的磁盘是约束条件之一：debug=0 省掉 Windows 上体积最大的 PDB。
 [profile.dev]
