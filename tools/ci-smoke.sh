@@ -258,6 +258,9 @@ need('课堂观察' in rd('page.html'), '首页缺标题')
 # 布局回归守卫：grid 子项不设 min-width:0 会把摘要横向裁掉（真截图时发现的）
 need('minmax(0,1fr)' in rd('page.html'), '主栏没锁 minmax(0,1fr)，宽内容会把摘要裁掉')
 need('min-width:0' in rd('page.html'), 'section 没设 min-width:0，同上')
+# 设置页唯一的控件必须是真按钮：span+onclick 键盘到不了、辅助技术读不出来
+need('role="switch"' in rd('page.html'), '数据源开关不是 role=switch，键盘不可达')
+need('NaN' not in rd('page.html'), '页面里出现 NaN')
 ls = json.loads(rd('lessons.json'))
 need(isinstance(ls, list) and len(ls) == 1, f'课程列表应 1 条，实际 {ls}')
 need(ls[0]['lesson_id'] == 'L-demo-0001' and ls[0]['class'] == '初二(3)班', '课程元信息（含中文）在 HTTP 链路上坏了')
@@ -267,6 +270,8 @@ need('a-fake' in st['sources'], 'stats 接口缺源健康表')
 d2 = rd('digest2.txt')
 for sec in ('一、量的分布', '四、采集健康', '五、按本轮采集，以下结论不能下'):
     need(sec in d2, f'digest 接口缺段：{sec}')
+need('NaN' not in d2, '摘要里出现 NaN——某处把字符串拼进了数值参数')
+need('静默 00:00' not in d2, '亚秒级静默被 mm:ss 抹成 00:00，读起来像全程没停过')
 # 没有关键帧就不该占一列（摘要要在窄窗口里读）
 grid = d2.split('二、')[1].split('三、')[0] if '二、' in d2 and '三、' in d2 else ''
 need(bool(grid), '摘要缺第二段的格子')

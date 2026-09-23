@@ -62,7 +62,7 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         mmss(st.teacher_ms + st.student_ms),
         mmss(st.teacher_ms),
         mmss(st.student_ms),
-        mmss(st.longest_silence_ms)
+        hms(st.longest_silence_ms)
     ));
     out.push_str(&format!(
         "  板书 {} 笔 / {}，其中 {}（{}）是边讲边写\n",
@@ -242,6 +242,15 @@ fn mmss(ms: u64) -> String {
         format!("{:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60)
     } else {
         format!("{:02}:{:02}", t / 60, t % 60)
+    }
+}
+
+/// 亚秒级用 mm:ss 会显示成 00:00，"最长静默 00:00"读起来像"全程没停过"。
+fn hms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        mmss(ms)
     }
 }
 
