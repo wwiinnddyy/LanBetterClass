@@ -133,7 +133,7 @@ function viewStats(p){
   const s = p.stats, d = Math.max(s.duration_ms,1);
   const card = (k,v,u='') => `<div class="card"><i>${k}</i><b>${v}</b>${u?` <u>${u}</u>`:''}</div>`;
   return `<div class="cards">
-    ${card('课堂时长', clock(s.duration_ms))}
+    ${card('课堂时间轴', clock(s.duration_ms), '墙钟 ' + clock(s.wall_ms))}
     ${card('教师讲话', clock(s.teacher_ms), pct(s.teacher_ms,d))}
     ${card('学生讲话', clock(s.student_ms), pct(s.student_ms,d))}
     ${card('最长静默', clock(s.longest_silence_ms))}

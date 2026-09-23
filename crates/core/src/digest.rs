@@ -48,7 +48,12 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         Some(prev) => out.push_str(&format!("上一节 {prev}（摘要会接续该链）\n")),
         None => out.push_str("上一节 未指定（本节是这条链的第一节，无法接续前情）\n"),
     }
-    out.push_str(&format!("课堂时长 {}   事件总量 {}\n\n", mmss(dur), st.strokes + st.utterances + st.keyframes + st.audio_chunks + st.eval_records));
+    out.push_str(&format!(
+        "课堂时间轴 {}   采集进程 {}   事件总量 {}\n\n",
+        mmss(dur),
+        mmss(st.wall_ms),
+        st.strokes + st.utterances + st.keyframes + st.audio_chunks + st.eval_records
+    ));
 
     // ---- 一、量的分布 ----
     out.push_str("一、量的分布\n");

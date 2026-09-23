@@ -125,6 +125,11 @@ need(max_t1 > 2_600_000,
 need(any('a-whiteboard' in w for w in p['warnings']), '期望适配器缺失的告警没触发')
 need(200 <= st['longest_silence_ms'] <= 6_000,
      f"最长静默 {st['longest_silence_ms']}ms：重启接缝应当是秒级，几百秒说明整段 sim 时间被复制了一份")
+# 两个时钟必须分开且自洽：占比的分母是课堂时间轴，不是采集进程墙钟
+need(st['wall_ms'] > 0, '没记录采集进程墙钟')
+need(0.0 <= st['speech_ratio'] <= 1.05, f"讲话占比 {st['speech_ratio']}，超过 100% 说明分母用错了时钟")
+need(any('时间轴' in w and '墙钟' in w for w in p['warnings']),
+     '模拟源是 400 倍速的，时间轴远长于墙钟，却没触发双时钟告警')
 
 if fails:
     print('SMOKE FAIL')

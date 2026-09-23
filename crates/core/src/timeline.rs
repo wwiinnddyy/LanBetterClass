@@ -31,7 +31,10 @@ pub struct TrackItem {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct LessonStats {
+    /// 课堂时间轴的长度（轨道上最远的事件结尾）。所有占比类指标都以它为分母。
     pub duration_ms: u64,
+    /// 采集进程自己的墙钟时长。和 duration_ms 不一致就说明源是加速的、或采集停过。
+    pub wall_ms: u64,
     pub utterances: usize,
     pub teacher_ms: u64,
     pub student_ms: u64,
@@ -339,12 +342,23 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
     stats.audio_bytes = audio_bytes;
     stats.pages_touched = pages.len();
     stats.longest_silence_ms = longest_silence;
-    stats.duration_ms = meta
+    // 两个时钟分开记：轨道长度是"这节课有多长"，墙钟是"采集进程跑了多久"。
+    // 真课堂上两者相等；采集器中途崩过、或机器睡过，它们就会岔开，
+    // 那时任何拿墙钟当分母的占比都会算出离谱数字——所以这里宁肯显式报出来。
+    stats.wall_ms = meta
         .ended_core_mono_us
         .map(|e| e.saturating_sub(meta.started_core_mono_us) / 1000)
-        .unwrap_or_else(|| track.iter().map(|i| i.t1_ms).max().unwrap_or(0));
+        .unwrap_or(0);
+    stats.duration_ms = track.iter().map(|i| i.t1_ms).max().unwrap_or(0);
     let dur = stats.duration_ms.max(1);
     stats.speech_ratio = (stats.teacher_ms + stats.student_ms) as f64 / dur as f64;
+    if stats.wall_ms > 0 && stats.duration_ms > stats.wall_ms * 3 / 2 {
+        warnings.push(format!(
+            "课堂时间轴 {}s 比采集进程墙钟 {}s 长：源是加速的，或采集曾经停过——两个数不能混用",
+            stats.duration_ms / 1000,
+            stats.wall_ms / 1000
+        ));
+    }
     stats.writing_while_speaking_ms = overlap_ms(&ink_spans, &speech_spans);
 
     if let Some(m) = meta.info.params.get("expected_adapters").and_then(|v| v.as_array()) {

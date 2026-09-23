@@ -41,6 +41,10 @@ jobs:
         shell: bash
         run: bash tools/ci-smoke.sh
 
+      - name: strip linker junk
+        shell: bash
+        run: rm -f target/debug/*.d
+
       - name: artifact
         uses: actions/upload-artifact@v4
         with:
