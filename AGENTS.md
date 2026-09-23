@@ -54,8 +54,15 @@ requires recompiling the client.
 | shared contract | `shared/` | crate `classagent-schema` | Single contract reused by client and server (types + `kind` conventions); name kept stable for imports |
 
 - `client/src/` — `protocol`, `supervisor`, `store`, `timeline`, `digest`, `serve`, `push`.
-- `client/adapters/*` — out-of-process data sources (e.g. `a-fake`, `a-audiofile`).
+- `client/adapters/*` — out-of-process data sources: `a-fake` (scripted), `a-audiofile` (blob convention),
+  `a-audio` (the real one: cpal capture + energy-VAD turns; `source: "fixture"` replays a wav through the
+  same pipeline, which is what makes it testable on a runner with no sound card).
 - `adapters.d/*.adapter.json` — per-environment load declarations (drop in = enable, rename = disable).
+
+**Adapter lifecycle contract**: `StopLesson` is where an adapter flushes, and the client keeps reading its
+stdout for a short quiet window after sending it and before closing the lesson. Anything emitted after
+`Stop` lands in `misc.ndjson`, i.e. outside the lesson — never defer a `session.close` or a final blob to
+`Stop`. This ordering once silently dropped a whole lesson's audio summary on real hardware.
 
 `agent/` is deliberately **not** a member of the root workspace: it carries its own `[workspace]` so the
 heavyweight webview dependency tree never enters the client/server pipeline. It builds in its own
@@ -67,6 +74,12 @@ workflow, `.github/workflows/agent.yml`.
   end-to-end guard the CI relies on. Keep assertions running on CI, not locally.
 - `tools/ci-integration.sh` drives the real client → server HTTP link (push, dedup, auth, path traversal)
   and prints `INTEG OK`.
+- `tools/ci-audio.sh` prints `AUDIO OK`: it synthesizes a lesson recording with Python's `wave`, then asserts
+  turn segmentation, third-party-readable blobs, and that a lesson cut off mid-speech still flushes its tail
+  plus `session.close` into that lesson. Linux needs `libasound2-dev` for cpal/ALSA (installed in `ci.yml`).
+  The mic path itself cannot be verified on a runner, so `a-audio` treats "no input device" as an observable
+  outcome (the source is simply absent from the health table) and reports `stream_errors` in `session.close`
+  rather than papering over dropouts; verify the device branch on a real machine.
 - Renaming a module means touching `ci.yml` artifact paths, `tools/*.sh`, and `docs/*.html` — grep for the
   old binary name before considering a rename done.
 - `debug = 0` and `strip`/`lto` are set in the workspace `Cargo.toml` because disk size matters; do not

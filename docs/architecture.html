@@ -53,8 +53,8 @@
     <p>把音频文件切成 1 秒分段写进 blobs/，事件只报文件名。证明"大块走文件、消息给引用"</p></div>
   <div class="box b-plan"><span class="tag plan">留位</span><h3>a-whiteboard</h3>
     <p>你的白板。契约已定：每点带 <code>dt_ms</code>、page_id 全局唯一、erase/undo 入流、抬笔即 flush</p></div>
-  <div class="box b-plan"><span class="tag plan">未实现</span><h3>a-audio</h3>
-    <p>WASAPI(含 loopback) / Pulse monitor → Opus 16k + VAD。<b>真开销在这</b></p></div>
+  <div class="box b-done"><span class="tag done">已验证</span><h3>a-audio</h3>
+    <p>cpal 开默认输入设备（WASAPI / ALSA）→ 混单声道，能量门限 VAD 按话轮切段进 blobs/。<b>还没做</b>：不重采样（设备给 48k 就记 48k）、不压缩</p></div>
   <div class="box b-plan"><span class="tag plan">未实现</span><h3>a-screen</h3>
     <p>希沃那一屏：DXGI 只在有变化时产帧 → 720p 关键帧 + pHash 对课件页，不做连续视频</p></div>
   <div class="box b-tbd"><span class="tag tbd">需求未定</span><h3>a-eval / a-courseware</h3>

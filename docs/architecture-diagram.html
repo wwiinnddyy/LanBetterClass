@@ -71,10 +71,10 @@
     <text class="y" x="450" y="160">留位（契约齐、实现缺）</text>
 
     <rect x="44" y="172" width="186" height="58" rx="8" fill="#1a1f28" stroke="#2a3242"/>
-    <rect x="44" y="172" width="4" height="58" rx="2" fill="#e0af68"/>
+    <rect x="44" y="172" width="4" height="58" rx="2" fill="#9ece6a"/>
     <text class="tt" x="58" y="192">a-audio</text>
-    <text class="s" x="58" y="209">WASAPI + Opus + VAD</text>
-    <text class="y" x="58" y="224">未实现（开销主体）</text>
+    <text class="s" x="58" y="209">cpal 采集 + VAD 切话轮</text>
+    <text class="g" x="58" y="224">已实现，真麦克风验过</text>
 
     <rect x="240" y="172" width="186" height="58" rx="8" fill="#1a1f28" stroke="#2a3242"/>
     <rect x="240" y="172" width="4" height="58" rx="2" fill="#e0af68"/>
@@ -248,7 +248,7 @@
 
   <!-- ================= 图例 ================= -->
   <g>
-    <rect x="28" y="724" width="1144" height="112" rx="10" fill="#12161d" stroke="#2a3242"/>
+    <rect x="28" y="724" width="1144" height="126" rx="10" fill="#12161d" stroke="#2a3242"/>
     <text class="tt" x="44" y="748">图例 / 现状判断</text>
     <rect x="200" y="738" width="12" height="12" rx="3" fill="#9ece6a"/><text class="s" x="218" y="748">已实现 + CI 断言</text>
     <rect x="340" y="738" width="12" height="12" rx="3" fill="#e0af68"/><text class="s" x="358" y="748">接口留位未实现</text>
@@ -257,7 +257,8 @@
 
     <text class="s" x="44" y="772">三端已连：① client push → ② server ingest（HTTP/1.1 + token，幂等去重）；③ agent 同时读 ① 的 serve 与 ② 的查询接口 —— 都是真实请求，CI 与本机各验过一遍。</text>
     <text class="s" x="44" y="792">输入侧模块化 = 独立子进程适配器，插拔不改客户端；契约单一来源 shared/（crate 名 classagent-schema），客户端与服务端共用同一份类型与 kind 约定。</text>
-    <text class="s" x="44" y="812" fill="#b9c3d6">还差的两步：④ 下游真正接模型（请求单已可回放），以及 a-whiteboard / a-audio / a-screen 三个真实数据源。做完整条链之前，「AI 结论」都不该对外宣称。</text>
+    <text class="s" x="44" y="812">录音这条路已经接通：a-audio 开输入设备、按话轮切段，尾段与 session.close 落进同一节课，掉帧次数随收课记录上报。</text>
+    <text class="s" x="44" y="830" fill="#b9c3d6">还差的两步：④ 下游真正接模型（请求单已可回放），以及 a-whiteboard / a-screen 两个真实数据源。音频也未做重采样与压缩（48k 单声道约 5.8 MB/分钟）。链没做完整之前，「AI 结论」不该对外宣称。</text>
   </g>
 </svg>
 </div>
