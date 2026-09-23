@@ -38,8 +38,13 @@ jobs:
           key: ${{ matrix.os }}
 
       # 整个 workspace 之前只靠 agent.yml 对 agent/ 做格式检查，client/server 这侧从没查过：
-      # 手改代码不会坏构建，但会一路漂。只上闸不自动改，免得某天发现一整片被重排。
+      # 手改代码不会坏构建，但会一路漂。
+      #
+      # 首次上闸实测：每个 .rs 都有 diff（~170 处，含本次没碰过的 server/src/main.rs、
+      # shared/src/lib.rs、a-fake），所以先只报警不拦路。等一次单独的 `chore: cargo fmt`
+      # 重排提交合进去，就删掉那行 `continue-on-error` 让它真开始拦。千万别把重排混进功能提交里。
       - name: fmt --check
+        continue-on-error: true
         run: cargo fmt --all --check
 
       - name: build
