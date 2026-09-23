@@ -267,6 +267,12 @@ need('a-fake' in st['sources'], 'stats 接口缺源健康表')
 d2 = rd('digest2.txt')
 for sec in ('一、量的分布', '四、采集健康', '五、按本轮采集，以下结论不能下'):
     need(sec in d2, f'digest 接口缺段：{sec}')
+# 没有关键帧就不该占一列（摘要要在窄窗口里读）
+grid = d2.split('二、')[1].split('三、')[0] if '二、' in d2 and '三、' in d2 else ''
+need(bool(grid), '摘要缺第二段的格子')
+need('帧' not in grid, '本轮没有关键帧，格子行里却还留着"帧"列')
+need(max((len(l) for l in grid.splitlines()), default=0) < 78,
+     f"格子行最宽 {max((len(l) for l in grid.splitlines()), default=0)} 字符，窄窗口会横向滚动")
 ad = json.loads(rd('adapters.json'))
 need(any(a.get('id') == 'a-fake' and a.get('enabled') is True for a in ad), 'adapters 接口没报出 a-fake')
 blob_disk = os.path.join(data, 'lessons', 'L-demo-0001', 'blobs', blob_name)

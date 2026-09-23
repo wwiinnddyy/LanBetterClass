@@ -113,19 +113,28 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
             _ => {}
         }
     }
-    out.push_str(&format!("二、逐 {} 秒一格（说话% · 笔 · 擦 · 页 · 屏）\n", bucket_ms / 1000));
+    // 没有关键帧就不占一列：摘要要在窄窗口里读，横向滚动等于没有。
+    let has_frames = st.keyframes > 0;
+    out.push_str(&format!(
+        "二、逐 {} 秒一格（{}）\n",
+        bucket_ms / 1000,
+        if has_frames { "说话% · 笔 · 擦 · 帧 · 页" } else { "说话% · 笔 · 擦 · 页" }
+    ));
     for (t0, b) in &buckets {
-        let bar = "#".repeat(((b.speech_ms as f64 / bucket_ms as f64) * 20.0).clamp(0.0, 20.0) as usize);
-        out.push_str(&format!(
-            "  {} {:<20} 说话{:>4}% 笔{:>4} 擦{:>3} 帧{:>3}  {}",
-            mmss(*t0),
-            bar,
-            (b.speech_ms as f64 * 100.0 / bucket_ms as f64) as u32,
-            b.strokes,
-            b.erases,
-            b.keyframes,
-            page_summary(&b.pages)
-        ));
+        let bar = "#".repeat(((b.speech_ms as f64 / bucket_ms as f64) * 12.0).clamp(0.0, 12.0) as usize);
+        let speech = (b.speech_ms as f64 * 100.0 / bucket_ms as f64) as u32;
+        let line = if has_frames {
+            format!(
+                "  {} {:<12} 说话{:>3}% 笔{:>4} 擦{:>3} 帧{:>3}  {}",
+                mmss(*t0), bar, speech, b.strokes, b.erases, b.keyframes, page_summary(&b.pages)
+            )
+        } else {
+            format!(
+                "  {} {:<12} 说话{:>3}% 笔{:>4} 擦{:>3}  {}",
+                mmss(*t0), bar, speech, b.strokes, b.erases, page_summary(&b.pages)
+            )
+        };
+        out.push_str(&line);
         out.push('\n');
     }
     out.push('\n');
