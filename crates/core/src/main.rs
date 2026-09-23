@@ -35,7 +35,7 @@ fn main() {
             eprintln!("  export --lesson ID [--out PATH]   导出 AI 载荷");
             eprintln!("  digest --lesson ID [--out PATH]   一节课的可读摘要（不接模型也能读）");
             eprintln!("  serve  [--host 127.0.0.1] [--port 8786] [--allow-write]");
-            eprintln!("         本地看板：/ 是页面，/api/lesson/ID/{digest,stats,blob/N} 是数据。");
+            eprintln!("         本地看板：/ 是页面，/api/lesson/ID/digest、/stats、/blob/名字 是数据。");
             eprintln!("         默认只绑本机；只有 --allow-write 才接受改数据源开关的 POST。");
             Ok(())
         }
