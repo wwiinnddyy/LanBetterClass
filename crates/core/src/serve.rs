@@ -9,6 +9,7 @@
 
 use crate::{digest, store, timeline};
 use serde_json::{json, Value};
+use std::io::Read;
 use std::path::PathBuf;
 use tiny_http::{Header, Method, Request, Response, Server};
 
@@ -63,8 +64,9 @@ fn handle(cfg: &Config, mut req: Request) {
         Some((p, _)) => p.to_string(),
         None => url,
     };
-    let is_get = matches!(req.method(), Method::Get);
-    let is_post = matches!(req.method(), Method::Post);
+    // tiny_http 的 method() 返回的是 &[Method]，不是 &Method。
+    let is_get = matches!(req.method().first(), Some(&Method::Get));
+    let is_post = matches!(req.method().first(), Some(&Method::Post));
 
     let reply = if is_get {
         route(cfg, &path)
@@ -73,8 +75,8 @@ fn handle(cfg: &Config, mut req: Request) {
             err(403, "写操作未开启：启动时加 --allow-write")
         } else if path.starts_with("/api/adapter/") {
             let mut body = Vec::new();
-            match req.data(&mut body) {
-                Ok(()) => toggle_adapter(cfg, &path, &body),
+            match req.as_reader().read_to_end(&mut body) {
+                Ok(_) => toggle_adapter(cfg, &path, &body),
                 Err(e) => err(400, &format!("读不到请求体：{e}")),
             }
         } else {
@@ -86,7 +88,7 @@ fn handle(cfg: &Config, mut req: Request) {
 
     let (code, ctype, body) = reply;
     let resp = Response::from_data(body)
-        .with_status(code)
+        .with_status_code(code)
         .with_header(header("Content-Type", ctype))
         // 看板是轮询的，缓存会让"这节课还在采"看起来像卡死。
         .with_header(header("Cache-Control", "no-store"));
