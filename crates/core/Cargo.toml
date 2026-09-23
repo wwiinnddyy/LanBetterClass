@@ -9,6 +9,10 @@ license.workspace = true
 name = "classagent-core"
 path = "src/main.rs"
 
+[lib]
+name = "classagent_core"
+path = "src/lib.rs"
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

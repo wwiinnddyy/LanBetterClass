@@ -4,10 +4,7 @@
 //! AI 能消费的 `ai_payload.json`。平台差异（DXGI / PipeWire / WASAPI）一律关在
 //! 适配器里，所以新增一个学校环境不需要重编译这里。
 
-mod protocol;
-mod store;
-mod supervisor;
-mod timeline;
+use classagent_core::{digest, protocol, store, supervisor, timeline};
 
 use classagent_schema::{kinds, Admit, Command, Envelope, LessonInfo, PROTO};
 use protocol::shorten;
@@ -29,11 +26,13 @@ fn main() {
         "run" => run(opts, data),
         "status" => status(data),
         "export" => export(opts, data),
+        "digest" => digest_cmd(opts, data),
         other => {
-            eprintln!("未知命令 {other}\n用法：classagent-core [run|status|export] [--data DIR] [--adapters DIR]");
+            eprintln!("未知命令 {other}\n用法：classagent-core [run|status|export|digest] [--data DIR] [--adapters DIR]");
             eprintln!("  run    --lesson FILE.json  启动即开课；控制台可输入 start/stop/status/quit");
             eprintln!("         --max-seconds N     N 秒后自动收尾退出（脚本化验证用）");
             eprintln!("  export --lesson ID [--out PATH]   导出 AI 载荷");
+            eprintln!("  digest --lesson ID [--out PATH]   一节课的可读摘要（不接模型也能读）");
             Ok(())
         }
     };
@@ -439,6 +438,35 @@ fn export(opts: Opts, data: PathBuf) -> std::io::Result<()> {
         if h.silent {
             println!("[core] 源 {s} 声明了 {:?} 却全程无事件", h.declared);
         }
+    }
+    Ok(())
+}
+
+/// 一节课的可读摘要。看板上显示的就是这段文本，所以它先于 UI 被 CI 断言。
+fn digest_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
+    let id = match opts.val("lesson") {
+        Some(v) => v.to_string(),
+        None => {
+            eprintln!("digest 需要 --lesson ID");
+            std::process::exit(2);
+        }
+    };
+    let meta = match store::read_meta(&data, &id)? {
+        Some(m) => m,
+        None => {
+            eprintln!("{id} 没有 meta.json");
+            std::process::exit(2);
+        }
+    };
+    let (records, _bad) = store::read_records(&data, &id)?;
+    let payload = timeline::build(&meta, &records);
+    let text = digest::render(&payload);
+    match opts.val("out") {
+        Some(p) => {
+            std::fs::write(p, text.as_bytes())?;
+            println!("[core] 摘要已写入 {p}");
+        }
+        None => print!("{text}"),
     }
     Ok(())
 }

@@ -133,3 +133,38 @@ if fails:
     sys.exit(1)
 print('SMOKE OK')
 PY
+
+# 摘要层：看板显示的就是这段文本，所以它先于 UI 被断言。
+"$BIN/classagent-core" digest --data "$DATA" --lesson "$LESSON" | tee "$WORK/digest.txt"
+
+python3 - "$WORK/digest.txt" <<'PY'
+import sys
+t = open(sys.argv[1], encoding='utf-8').read()
+fails = []
+def has(sub, why):
+    if sub not in t:
+        fails.append(f'{why}：缺 {sub!r}')
+
+has('初二(3)班 · 数学', '抬头没有班级学科')
+has('一、量的分布', '缺第一段')
+has('二、逐', '缺时间轴格子段')
+has('三、板面轨迹', '缺板面轨迹段')
+has('四、采集健康', '缺健康段')
+has('五、按本轮采集，以下结论不能下', '缺"不能下什么结论"段——这段比数字更重要')
+has('边讲边写', '没有把 overlap 讲成人话')
+has('缺口 3 处/丢 6 条', 'a-fake 的缺口没进健康段（每次 spawn 跳 2 号 × 3 次）')
+has('重启 2 次', '重启次数没进健康段')
+has('没有评估数据', 'eval 缺失时没告诉读者达成度类结论不能做')
+has('没有屏幕证据', '关键帧缺失时没说明希沃那路未采')
+has('无法回溯', '同上')
+if 'SMOKE' in t:
+    fails.append('摘要里混进了测试文本')
+if len(t) < 800:
+    fails.append(f'摘要只有 {len(t)} 字符，明显没渲染完整')
+if fails:
+    print('DIGEST FAIL')
+    for f in fails:
+        print('  -', f)
+    sys.exit(1)
+print('DIGEST OK')
+PY

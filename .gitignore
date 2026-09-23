@@ -1,5 +1,6 @@
 /target
 /data
 /.ci-tmp
+/try
 *.pdb
 *.exe
