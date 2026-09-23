@@ -17,6 +17,10 @@ const HTML: &str = "text/html; charset=utf-8";
 const JSON: &str = "application/json; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
+/// 一次能写进 params 的上限。没有这条，一个手滑贴进来的巨型对象会让声明文件
+/// 变成一个几十 MB 的 JSON——而它是每次开课都要重读一遍的东西。
+const MAX_PARAMS_BYTES: usize = 8 * 1024;
+
 /// 前端是零构建的单文件，直接编进二进制：一体机上不用装 node，也不用带 dist 目录。
 const PAGE: &str = include_str!("../web/index.html");
 
@@ -75,7 +79,7 @@ fn handle(cfg: &Config, mut req: Request) {
         } else if path.starts_with("/api/adapter/") {
             let mut body = Vec::new();
             match req.as_reader().read_to_end(&mut body) {
-                Ok(_) => toggle_adapter(cfg, &path, &body),
+                Ok(_) => patch_adapter(cfg, &path, &body),
                 Err(e) => err(400, &format!("读不到请求体：{e}")),
             }
         } else {
@@ -241,8 +245,12 @@ fn adapters(cfg: &Config) -> Reply {
     (200, JSON, to_vec(&out))
 }
 
-/// `POST /api/adapter/<file>` body `{"enabled": true}`
-fn toggle_adapter(cfg: &Config, path: &str, body: &[u8]) -> Reply {
+/// `POST /api/adapter/<file>` body `{"enabled": bool}` 和/或 `{"params": {...}}`
+///
+/// 只许改这两项。`argv` / `cwd` / `id` / `platforms` 一律拒——`--allow-write` 的前提是
+/// "本机教师可信"，而能改 argv 等于把声明文件换成"启动时替我执行任意程序"，
+/// 那不再是配置接口，是本机命令执行入口。要换可执行文件必须人工改声明并重启客户端。
+fn patch_adapter(cfg: &Config, path: &str, body: &[u8]) -> Reply {
     let file = match path.strip_prefix("/api/adapter/") {
         Some(f) => f,
         None => return err(404, "路径不对"),
@@ -254,24 +262,19 @@ fn toggle_adapter(cfg: &Config, path: &str, body: &[u8]) -> Reply {
         Ok(v) => v,
         Err(e) => return err(400, &format!("请求体不是 JSON：{e}")),
     };
-    let enabled = match want.get("enabled").and_then(|v| v.as_bool()) {
-        Some(b) => b,
-        None => return err(400, "请求体需要 {\"enabled\": true|false}"),
+    let merged = match merge_decl(file, &want) {
+        Ok(m) => m,
+        Err(e) => return err(400, &e),
     };
     let p = cfg.adapters.join(file);
     let text = match std::fs::read_to_string(&p) {
         Ok(t) => t,
         Err(_) => return err(404, "没有这个声明文件"),
     };
-    let mut v: Value = match serde_json::from_str(&text) {
+    let (out, enabled, params_changed) = match merge_decl_into(&text, &merged) {
         Ok(v) => v,
-        Err(e) => return err(400, &format!("{file} 本身不是合法 JSON：{e}")),
+        Err(e) => return err(400, &e),
     };
-    if !v.is_object() {
-        return err(400, "声明文件必须是 JSON 对象");
-    }
-    v["enabled"] = json!(enabled);
-    let out = serde_json::to_string_pretty(&v).unwrap_or_else(|_| text.clone());
 
     // 原子替换：改到一半被中断会留下一个"采不起来又看不懂"的现场。
     let tmp = p.with_extension("json.tmp");
@@ -284,15 +287,124 @@ fn toggle_adapter(cfg: &Config, path: &str, body: &[u8]) -> Reply {
     if let Err(e) = wrote {
         return err(500, &format!("写入失败：{e}"));
     }
-    (
-        200,
-        JSON,
-        to_vec(&json!({
-            "file": file,
-            "enabled": enabled,
-            "note": "核心重启该源或下次启动时生效；正在采集的这一节不受影响"
-        })),
-    )
+    let mut resp = json!({ "file": file });
+    if let Some(b) = enabled {
+        resp["enabled"] = json!(b);
+    }
+    resp["note"] = json!(if params_changed {
+        // 正在采集的这一节用的还是开课时下发的参数——"立刻生效"需要重启该源，
+        // 而重启会把正在说的那一句切成两段。这句话必须如实，不许承诺做不到的事。
+        "已写入：下一节课生效；本节课继续用开课时的参数"
+    } else {
+        "已写入：该源下次被启动时生效"
+    });
+    (200, JSON, to_vec(&resp))
+}
+
+/// 校验请求体，整理出"允许被合并进去的东西"。纯函数，所以四条边界能被单测钉住。
+fn merge_decl(file: &str, want: &Value) -> Result<Value, String> {
+    let obj = want
+        .as_object()
+        .ok_or_else(|| format!("{file}: 请求体必须是 JSON 对象，形如 {{\"enabled\": true}} 或 {{\"params\": {{…}}}}"))?;
+    for k in obj.keys() {
+        if k != "enabled" && k != "params" {
+            return Err(format!(
+                "{file}: 只能改 enabled/params，收到 {k}；换可执行文件请人工改声明并重启客户端"
+            ));
+        }
+    }
+    if obj.is_empty() {
+        return Err(format!("{file}: 请求体是空对象，没有任何要改的字段"));
+    }
+    let mut out = serde_json::Map::new();
+    // enabled 若出现就必须是严格 bool："1"/"yes" 静默当成 true，会把"我关掉了"这个
+    // 判断建立在一个从没被理解的输入上。
+    if let Some(v) = obj.get("enabled") {
+        match v.as_bool() {
+            Some(b) => {
+                out.insert("enabled".into(), json!(b));
+            }
+            None => return Err(format!("{file}: enabled 必须是 true 或 false")),
+        }
+    }
+    if let Some(v) = obj.get("params") {
+        let p = v.as_object().ok_or_else(|| format!("{file}: params 必须是个对象"))?;
+        if let Some(vad) = p.get("vad") {
+            vad_is_sane(vad)?;
+        }
+        let size = serde_json::to_vec(v).map(|b| b.len()).unwrap_or(usize::MAX);
+        if size > MAX_PARAMS_BYTES {
+            return Err(format!("{file}: params 序列化后 {size} 字节，超过 {MAX_PARAMS_BYTES} 上限"));
+        }
+        out.insert("params".into(), v.clone());
+    }
+    Ok(Value::Object(out))
+}
+
+/// 迟滞带的上下沿只拦一类写错：`rms_close >= rms_open` 会被适配器**静默**钳成
+/// `rms_open * 0.6`（见 a-audio/src/vad.rs），教师写完看不出自己填的被改过——
+/// 所以必须在写盘前拦住。负值同理（会被 `filter(|x| *x > 0.0)` 静默忽略）。
+/// 其余越界值交给适配器自己钳，服务端不抄第二份会漂移的校验。
+fn vad_is_sane(vad: &Value) -> Result<(), String> {
+    let o = vad.as_object().ok_or_else(|| "params.vad 必须是个对象".to_string())?;
+    for k in ["rms_open", "rms_close"] {
+        if let Some(v) = o.get(k) {
+            if v.as_f64().map(|x| x.is_finite() && x < 0.0).unwrap_or(false) {
+                return Err(format!("vad.{k} 不能是负数：{v}"));
+            }
+        }
+    }
+    if let (Some(o), Some(c)) = (
+        o.get("rms_open").and_then(|v| v.as_f64()),
+        o.get("rms_close").and_then(|v| v.as_f64()),
+    ) {
+        if c >= o {
+            return Err(format!(
+                "vad.rms_close（{c}）必须低于 vad.rms_open（{o}）：关段门限不低于开段门限时，语音段永远关不掉"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 把已校验的补丁合并进声明文本。返回（新文本，enabled，是否改了 params）。
+fn merge_decl_into(text: &str, merged: &Value) -> Result<(String, Option<bool>, bool), String> {
+    let mut v: Value = serde_json::from_str(text).map_err(|e| format!("声明文件本身不是合法 JSON：{e}"))?;
+    if !v.is_object() {
+        return Err("声明文件必须是 JSON 对象".to_string());
+    }
+    let enabled = merged.get("enabled").and_then(|x| x.as_bool());
+    if let Some(b) = enabled {
+        v["enabled"] = json!(b);
+    }
+    let params_changed = merged.get("params").is_some();
+    if params_changed {
+        // merged 里只可能有 enabled 与 params 两个键（上面 merge_decl 已经把其它的拒掉了），
+        // 所以这里可以直接整体深合并，不必再分一次字典。
+        deep_merge(&mut v, merged);
+    }
+    let out = serde_json::to_string_pretty(&v).map_err(|e| format!("序列化失败：{e}"))?;
+    Ok((out, enabled, params_changed))
+}
+
+/// 对象递归深合并，标量直接替换。
+///
+/// 必须是深合并：调参界面只想提交 `params.vad.rms_open` 一个数，浅赋值会把同级的
+/// `source`/`fixture` 与 `tuning` 这类指引位一并抹掉——那是别人的配置。
+fn deep_merge(dst: &mut Value, src: &Value) {
+    match (dst, src) {
+        (Value::Object(d), Value::Object(s)) => {
+            for (k, v) in s {
+                match d.get_mut(k) {
+                    Some(existing) if existing.is_object() && v.is_object() => deep_merge(existing, v),
+                    _ => {
+                        d.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        _ => *dst = src.clone(),
+    }
 }
 
 fn build_payload(cfg: &Config, id: &str) -> Option<timeline::AiPayload> {
@@ -365,5 +477,95 @@ mod tests {
         for ok in ["audio-000000000900ms.pcm", "L-demo-0001", "a-fake.adapter.json"] {
             assert!(safe_component(ok), "不该误伤 {ok:?}");
         }
+    }
+
+    fn decl() -> Value {
+        json!({
+            "id": "a-audio",
+            "enabled": true,
+            "argv": ["$TARGET_DIR/a-audio"],
+            "params": {
+                "source": "fixture", "fixture": "x/一节课.wav", "speed": 20,
+                "vad": { "rms_open": 500, "rms_close": 300, "min_speech_ms": 250 },
+                "tuning": "现场调门限的指引，不属于本次提交"
+            }
+        })
+    }
+
+    /// 只改一个门限不能顺手删掉别人的配置。深合并是这个接口唯一的护栏。
+    #[test]
+    fn params_merge_is_deep_and_surgical() {
+        let text = serde_json::to_string(&decl()).unwrap();
+        let patch = merge_decl(
+            "a-audio.adapter.json",
+            &json!({ "params": { "vad": { "rms_open": 45.0 } } }),
+        )
+        .expect("只提交一个 vad 字段必须被接受");
+        let (out, enabled, changed) = merge_decl_into(&text, &patch).unwrap();
+        assert!(changed);
+        assert!(enabled.is_none(), "没提交 enabled 就不该顺手写它");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["params"]["vad"]["rms_open"], json!(45.0));
+        assert_eq!(v["params"]["vad"]["rms_close"], json!(300), "同级的其它门限必须原样保留");
+        assert_eq!(v["params"]["source"], json!("fixture"));
+        assert_eq!(v["params"]["fixture"], json!("x/一节课.wav"));
+        assert_eq!(v["params"]["tuning"], decl()["params"]["tuning"], "调参指引位不能被抹掉");
+        assert_eq!(v["argv"], decl()["argv"], "argv 无论如何不该被动");
+        assert_eq!(v["enabled"], json!(true));
+    }
+
+    /// 这是安全闸门：能改 argv 的写接口等于本机任意命令执行。
+    #[test]
+    fn argv_and_unknown_keys_are_refused() {
+        for body in [
+            json!({ "argv": ["calc.exe"] }),
+            json!({ "params": {}, "cwd": "C:\\Windows" }),
+            json!({ "id": "other" }),
+            json!({ "platforms": ["windows", "linux"] }),
+            json!({ "enabled": true, "argv": [] }),
+        ] {
+            let err = merge_decl("a.adapter.json", &body).expect_err(&format!("{body:?} 必须被拒"));
+            assert!(err.contains("只能改 enabled/params"), "报错要说清能改什么：{err}");
+        }
+    }
+
+    #[test]
+    fn types_are_checked_before_writing() {
+        // 保住看板既有的严格 bool 语义："yes" 不能被当成 true 写盘。
+        assert!(merge_decl("a.adapter.json", &json!({ "enabled": "yes" })).is_err());
+        assert!(merge_decl("a.adapter.json", &json!({ "params": "x" })).is_err());
+        assert!(merge_decl("a.adapter.json", &json!({ "params": { "vad": 3 } })).is_err());
+        assert!(merge_decl("a.adapter.json", &json!({})).is_err(), "空对象不该被当成一次成功的写入");
+        assert!(merge_decl("a.adapter.json", &json!("x")).is_err());
+        assert!(merge_decl("a.adapter.json", &json!({ "enabled": false })).is_ok());
+    }
+
+    /// 写反了的迟滞带会被适配器静默钳成 rms_open*0.6，教师看不出被改过——
+    /// 所以这一类必须在写盘前就拒掉。
+    #[test]
+    fn reversed_hysteresis_is_refused_but_partial_updates_are_not() {
+        assert!(vad_is_sane(&json!({ "rms_open": 400.0, "rms_close": 900.0 })).is_err());
+        assert!(vad_is_sane(&json!({ "rms_open": 400.0, "rms_close": 400.0 })).is_err());
+        assert!(vad_is_sane(&json!({ "rms_open": -1.0 })).is_err());
+        assert!(vad_is_sane(&json!({ "rms_close": -5 })).is_err());
+        // 只改一个时不知道另一个，不能拦 —— 磁盘上还有现值，合完再由适配器钳。
+        assert!(vad_is_sane(&json!({ "rms_open": 45.0 })).is_ok());
+        assert!(vad_is_sane(&json!({ "min_speech_ms": 0 })).is_ok());
+        // 超限值交给适配器，服务端不抄第二份会漂移的校验（frame_ms < 5 会被丢弃用默认）。
+        assert!(vad_is_sane(&json!({ "frame_ms": 1, "max_segment_ms": 10 })).is_ok());
+    }
+
+    #[test]
+    fn oversized_params_is_refused() {
+        let big = json!({ "params": { "note": "x".repeat(MAX_PARAMS_BYTES + 10) } });
+        let err = merge_decl("a.adapter.json", &big).expect_err("巨型 params 必须被拒");
+        assert!(err.contains("上限"), "{err}");
+    }
+
+    #[test]
+    fn a_broken_declaration_is_not_overwritten() {
+        let err = merge_decl_into("{ not json", &json!({ "enabled": false })).unwrap_err();
+        assert!(err.contains("不是合法 JSON"), "{err}");
+        assert!(merge_decl_into("[1,2]", &json!({ "enabled": false })).unwrap_err().contains("对象"));
     }
 }

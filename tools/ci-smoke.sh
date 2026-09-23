@@ -233,11 +233,31 @@ W3=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"enabled":"yes"}' 
      -o "$WORK/w3.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
 W4=$(curl -s --path-as-is -X POST -H 'Content-Type: application/json' -d '{"enabled":true}' \
      -o "$WORK/w4.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/../../Cargo.toml")
+
+# --- 写 params：这是本轮新开的口子，也是唯一的安全边界 ---
+# 每写一次前留一份字节快照："没被顺手改动"只能靠比对字节断，靠字段名猜是猜不出来的。
+cp "$ADP/a-fake.adapter.json" "$WORK/p0.before"
+P1=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"params":{"vad":{"rms_open":777}}}' \
+     -o "$WORK/p1.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+cp "$ADP/a-fake.adapter.json" "$WORK/p1.before"
+# argv 是 RCE 闸门：能改 argv 的写接口不是配置接口
+P2=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"argv":["calc.exe"]}' \
+     -o "$WORK/p2.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+# 迟滞带写反：适配器会静默钳成 rms_open*0.6，所以必须在写盘前就拒
+P3=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"params":{"vad":{"rms_close":900,"rms_open":400}}}' \
+     -o "$WORK/p3.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+P4=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"params":"x"}' \
+     -o "$WORK/p4.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+P5=$(curl -s -X POST -H 'Content-Type: application/json' -d '{}' \
+     -o "$WORK/p5.json" -w '%{http_code}' "http://127.0.0.1:$PORT2/api/adapter/a-fake.adapter.json")
+# 磁盘是事实来源：写进去的值必须能从只读接口读回来（观察端就是这么自证"改了没生效"的）
+ADP2_JSON=$(code "http://127.0.0.1:$PORT2/api/adapters" "$WORK/adapters2.json")
 kill $SRV2 2>/dev/null || true; trap - EXIT
 
 cat > "$WORK/codes.txt" <<EOF
 html=$HTML lessons=$LESS stats=$STA digest=$DIG adapters=$ADP_JSON missing=$MISS blob=$BLOB
 t1=$T1 t2=$T2 t3=$T3 t4=$T4 post_readonly=$W1 post_write=$W2 post_badbody=$W3 post_traversal=$W4
+post_params=$P1 post_argv=$P2 vad_reversed=$P3 params_notobj=$P4 params_empty=$P5 adapters_readback=$ADP2_JSON
 EOF
 
 python3 - "$WORK" "$DATA" "$ADP" "$BLOB_NAME" <<'PY'
@@ -245,6 +265,7 @@ import json, os, sys
 work, data, adp, blob_name = sys.argv[1:5]
 codes = dict(tok.split('=', 1) for tok in open(os.path.join(work, 'codes.txt'), encoding='utf-8').read().split() if '=' in tok)
 rd = lambda n: open(os.path.join(work, n), encoding='utf-8').read()
+rb = lambda n: open(os.path.join(work, n), 'rb').read()
 size = lambda p: os.path.getsize(os.path.join(work, p))
 fails = []
 def need(c, m):
@@ -301,9 +322,144 @@ need(codes['post_badbody'] == '400', '非法 body 竟然通过')
 need(codes['post_traversal'] in ('400', '404'), f'写接口穿越没被挡（{codes["post_traversal"]}）')
 need(os.path.getsize(os.path.join('Cargo.toml')) > 100, 'Cargo.toml 被动过？')
 
+# --- 写 params：能力、边界、以及“只改我改的那一项” ---
+decl_path = os.path.join(adp, 'a-fake.adapter.json')
+need(codes['post_params'] == '200', f'写 params 没成功（{codes["post_params"]}）：{rd("p1.json")}')
+now = json.loads(open(decl_path, encoding='utf-8').read())
+before = json.loads(rb('p1.before').decode('utf-8'))
+need(now['params']['vad']['rms_open'] == 777, f'只提交一个门限就要只改它一个：{now["params"]}')
+need(now['argv'] == before['argv'], f'argv 被改动了：{now["argv"]}')
+need(now['enabled'] == before['enabled'], '只提交 params 时不该动 enabled')
+for k in ('speed', 'minutes', 'skip_seq_at', 'crash_after_ticks'):
+    need(now['params'].get(k) == before['params'].get(k), f'深合并丢了别人的字段：params.{k}')
+need('下一节课' in json.loads(rd('p1.json')).get('note', ''),
+     '改了参数却不告诉教师什么时候生效，等于让他猜')
+
+# argv 闸门：400 并且磁盘字节一字未动（只拒不写才算闸）
+need(codes['post_argv'] == '400', f'写 argv 竟然通过（{codes["post_argv"]}）——这等于本机任意命令执行')
+need(rb('p1.before') == open(decl_path, 'rb').read(), '被拒的写请求竟然动了磁盘')
+need('只能改 enabled/params' in rd('p2.json'), f'400 得说清能改什么：{rd("p2.json")}')
+
+need(codes['vad_reversed'] == '400', 'rms_close >= rms_open 会被适配器静默钳制，必须写盘前就拒')
+need(codes['params_notobj'] == '400', 'params 不是对象竟然通过')
+need(codes['params_empty'] == '400', '空对象不该被当成一次成功的写入')
+need(rb('p1.before') == open(decl_path, 'rb').read(), '被拒的写请求把声明文件改坏了')
+
+# 磁盘是事实来源：写完能从只读接口读回同一个值
+ad2 = json.loads(rd('adapters2.json'))
+fake2 = [a for a in ad2 if a.get('id') == 'a-fake']
+need(bool(fake2), '写过的源在读接口里看不到了')
+need(fake2[0]['params']['vad']['rms_open'] == 777, '读接口没反映磁盘上的新值')
+need(codes['adapters_readback'] == '200', '写完后读接口不是 200')
+
 if fails:
     print('SERVE FAIL')
     for f in fails: print('  -', f)
     sys.exit(1)
 print('SERVE OK')
+PY
+
+# ---------------------------------------------------------------------------
+# 开课重读声明。看板的写接口只能改文件（serve 与 run 是两个进程、中间没有 IPC），
+# 采集用的却是内存里的 spec —— 两者靠 start_lesson 里的 reload_params 接上。
+# 这一段钉的就是这根接头：同一个进程内 stop → 改文件 → start，下一节课的行为
+# 必须跟着新参数走。拿旧 spec 的话，"改完参数"要重启客户端才生效，没人会知道。
+# 不用 a-audio：CI runner 没麦克风。a-audiofile 的 chunk_ms 是个数得出来的参数。
+# ---------------------------------------------------------------------------
+ADP2=$WORK/adapters-reload
+RDATA=$WORK/data-reload
+RLOG=$WORK/reload.log
+rm -rf "$ADP2" "$RDATA"; rm -f "$RLOG"; mkdir -p "$ADP2" "$RDATA"
+python3 - "$ADP2" "$TONE" <<'PY'
+import json, sys
+adp, tone = sys.argv[1], sys.argv[2]
+af = json.load(open('adapters.d/a-audiofile.adapter.json', encoding='utf-8'))
+af['enabled'] = True
+af['params'].update({'path': tone.replace('\\', '/'), 'speed': 400, 'chunk_ms': 1000})
+json.dump(af, open(f'{adp}/a-audiofile.adapter.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+PY
+{
+  sleep 2
+  echo stop
+  # 等核心自己那句"收课"落到日志里再改文件（适配器的同名日志会先一步出现，所以带上 [client]）：
+  # 改早了撞上上一节的收尾，改晚了撞上下一节的开课。
+  for _ in $(seq 1 80); do
+    grep -q '\[client\] 收课 L-demo-0001' "$RLOG" 2>/dev/null && break
+    sleep 0.25
+  done
+  python3 - "$ADP2" <<'PY'
+import json, sys
+p = f'{sys.argv[1]}/a-audiofile.adapter.json'
+d = json.load(open(p, encoding='utf-8'))
+d['params']['chunk_ms'] = 250   # 段长除以 4，段数就乘以 4：这个变化在导出里数得出来
+json.dump(d, open(p, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+PY
+  echo 'start {"lesson_id":"L-reload-2"}'
+  sleep 8
+  echo quit
+} | "$CLIENT" run --data "$RDATA" --adapters "$ADP2" --lesson examples/lesson.demo.json \
+    --max-seconds 60 > "$RLOG" 2>&1
+grep -q '已按最新声明重新配置' "$RLOG" || { echo "FAIL 开课时没重读声明"; tail -25 "$RLOG"; exit 1; }
+for LESSON_ID in L-demo-0001 L-reload-2; do
+  "$CLIENT" export --data "$RDATA" --lesson "$LESSON_ID" > "$WORK/export-$LESSON_ID.log" 2>&1 \
+    || { echo "FAIL 导出 $LESSON_ID 失败"; tail -25 "$RLOG"; exit 1; }
+done
+
+tail -12 "$RLOG"
+
+python3 - "$RDATA" <<'PY'
+import json, os, sys
+data = sys.argv[1]
+fails = []
+def need(c, m):
+    if not c: fails.append(m)
+
+def read(lesson):
+    path = os.path.join(data, 'lessons', lesson, 'events.ndjson')
+    if not os.path.exists(path):
+        return []
+    return [json.loads(l) for l in open(path, encoding='utf-8') if l.strip()]
+
+ck = lambda evs: [e['envelope']['payload'] for e in evs if e['envelope']['kind'] == 'audio.chunk']
+e1, e2 = read('L-demo-0001'), read('L-reload-2')
+k1, k2 = ck(e1), ck(e2)
+need(bool(k1) and bool(k2), f'两节课都得有音频分段：{len(k1)} / {len(k2)}')
+if fails:
+    print('RELOAD FAIL')
+    for f in fails:
+        print('  -', f)
+    sys.exit(1)
+
+# 段长是唯一能分辨"这一节确实是用新参数采的"的证据：光看段数变多，可能是时序凑巧。
+# s16le 单声道 16k 下 chunk_ms=1000 → 32000 字节，250 → 8000 字节。
+s1 = {p['len'] for p in k1}
+s2 = {p['len'] for p in k2}
+print(f'  第一节 {len(k1)} 段，段长字节={sorted(s1)}；第二节 {len(k2)} 段，段长字节={sorted(s2)}')
+need(s1 == {32000}, f'第一节每段都该是 32000 字节（chunk_ms=1000）：{sorted(s1)}')
+need(s2 == {8000}, f'第二节每段都该是 8000 字节（chunk_ms=250）：开课时没重读声明？{sorted(s2)}')
+need(len(k2) >= len(k1) * 3, f'段数没随 chunk_ms 变小而变多：{len(k1)} → {len(k2)}')
+
+# 重读只换参数，不该弄乱 seq 空间，也不该把上一节课的扫到课外。
+for lesson in ('L-demo-0001', 'L-reload-2'):
+    p = json.load(open(os.path.join(data, 'lessons', lesson, 'ai_payload.json'), encoding='utf-8'))
+    src = p['sources'].get('a-audiofile')
+    need(bool(src), f'{lesson} 健康表里没有 a-audiofile')
+    if not src:
+        continue
+    need(src['duplicates'] == 0, f"{lesson} 出现 {src['duplicates']} 条重复事件：重读不该动 seq 空间")
+    need(src['gaps'] == 0, f"{lesson} 出现 {src['gaps']} 处缺口")
+    need(src['close'] and src['close']['chunks'] > 0, f"{lesson} 的收课统计丢了：{src['close']}")
+    c = [e for e in read(lesson) if e['envelope']['kind'] == 'session.close']
+    need(len(c) == 1, f'{lesson} 应当只有一条 session.close（重读不是重启），实得 {len(c)}')
+
+if os.path.exists(os.path.join(data, 'misc.ndjson')):
+    need('a-audiofile' not in open(os.path.join(data, 'misc.ndjson'), encoding='utf-8').read(),
+         '第二节课的事件流到了课外面')
+
+if fails:
+    print('RELOAD FAIL')
+    for f in fails:
+        print('  -', f)
+    sys.exit(1)
+print('RELOAD OK')
 PY

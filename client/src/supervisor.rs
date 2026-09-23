@@ -188,6 +188,9 @@ impl Supervisor {
         }
         let mut respawned = Vec::new();
         for i in due {
+            // 崩溃重启拿的必须是磁盘上的最新声明：拿内存里那份旧 spec 的话，
+            // "改完参数后源挂了再起来"会静默回到旧门限，而这正是调参时最常见的情境。
+            refresh_params(&mut self.handles[i]);
             let spec = self.handles[i].spec.clone();
             let prev_restarts = self.handles[i].restarts;
             let tx = self.tx.clone();
@@ -205,6 +208,39 @@ impl Supervisor {
             }
         }
         respawned
+    }
+
+    /// 开课前把磁盘上的声明重新读进来，并下发 `Configure`。
+    ///
+    /// 这是"改完参数什么时候生效"的答案：下一节课。为什么不是当场：
+    /// 1. 看板的 `serve` 与采集的 `run` 是两个进程，中间没有 IPC，写接口只能改文件；
+    /// 2. 想立刻生效就得 kill + respawn 该源，而 `send()` 在 `asked_to_stop` 之后是 no-op、
+    ///    `reap()` 对主动停的源不再重启——那条路会把正在说的那一句切成两段，
+    ///    还会造出"一课多代"的 seq 空间。代价不该由一个门限数字来付。
+    ///
+    /// 只重读 `params`：`argv`/`cwd` 写接口本来就拒改，人工改了也应该只在下次启动客户端
+    /// 时生效——开课开到一半换掉可执行文件，没人能从导出里看出采到的东西换了来路。
+    /// 任何读不到的情况都保留旧值并继续：声明文件被临时锁住不该让这节课开不了。
+    pub fn reload_params(&mut self) -> Vec<String> {
+        let mut done = Vec::new();
+        for h in self.handles.iter_mut() {
+            if !refresh_params(h) {
+                continue;
+            }
+            if h.stdin.is_none() {
+                // 没管道可写（未启动/正在退出）：它的下一代在 spawn 时自己会读到新值。
+                continue;
+            }
+            let cmd = WireCommand::Configure {
+                data_dir: self.data_dir.to_string_lossy().into_owned(),
+                params: h.spec.decl.params.clone(),
+            };
+            match write_line(h.stdin.as_mut().expect("checked above"), &cmd) {
+                Ok(()) => done.push(h.id.clone()),
+                Err(e) => eprintln!("[client] {e}：{} 沿用上次下发的参数", h.id),
+            }
+        }
+        done
     }
 
     pub fn kill(&mut self, id: &str, why: &str) {
@@ -250,6 +286,30 @@ impl Supervisor {
             .map(|h| (h.id.clone(), h.status, h.note.clone(), h.manifest.clone(), h.restarts))
             .collect()
     }
+}
+
+/// 重读 `spec.decl_path` 里的 `params` 并写回内存。成功（不论值有没有变）返回 true。
+///
+/// 与 `reload_params` 共用：前者负责下发给活着的源，后者负责下一代 spawn 时的取值。
+/// 读不到就保留旧值——开课/重启不该被一个临时锁住的声明文件挡住。
+fn refresh_params(h: &mut AdapterHandle) -> bool {
+    let path = h.spec.decl_path.clone();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[client] 重读 {} 失败（{e}），沿用内存里的参数", h.id);
+            return false;
+        }
+    };
+    let decl: classagent_schema::AdapterDecl = match serde_json::from_str(&text) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("[client] {} 重新解析失败（{e}），沿用内存里的参数", h.id);
+            return false;
+        }
+    };
+    h.spec.decl.params = decl.params;
+    true
 }
 
 fn placeholder(spec: AdapterSpec) -> AdapterHandle {
@@ -381,4 +441,53 @@ pub fn discover(dir: &Path) -> io::Result<(Vec<AdapterSpec>, Vec<String>)> {
     }
     specs.sort_by(|a, b| a.decl.id.cmp(&b.decl.id));
     Ok((specs, skipped))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{placeholder, refresh_params, AdapterSpec};
+    use classagent_schema::AdapterDecl;
+
+    fn decl(text: &str) -> AdapterDecl {
+        serde_json::from_str(text).expect("测试用的声明本身要是合法的")
+    }
+
+    /// “改门限 → 下节课生效”整条链的第一步：重读必须只拿 params。
+    #[test]
+    fn reload_picks_up_params_but_never_argv() {
+        let dir = std::env::temp_dir().join(format!("ca-sup-{}-{}", std::process::id(), file!()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a-x.adapter.json");
+        std::fs::write(
+            &path,
+        r#"{"id":"a-x","argv":["true"],"params":{"vad":{"rms_open":500}}}"#,
+        )
+        .unwrap();
+        let mut h = placeholder(AdapterSpec { decl: decl(&std::fs::read_to_string(&path).unwrap()), decl_path: path.clone() });
+
+        // 看板的写接口把磁盘改了，内存里还是旧值：重读要把它拿回来。
+        std::fs::write(
+            &path,
+        r#"{"id":"a-x","argv":["true"],"params":{"vad":{"rms_open":45}}}"#,
+        )
+        .unwrap();
+        assert!(refresh_params(&mut h), "声明可读时重读必须成功");
+        assert_eq!(h.spec.decl.params["vad"]["rms_open"], serde_json::json!(45));
+
+        // 只拿 params：argv 被人工改成本机另一个程序，不能从这条路径静默生效。
+        std::fs::write(
+            &path,
+        r#"{"id":"a-x","argv":["calc.exe"],"params":{"vad":{"rms_open":45}}}"#,
+        )
+        .unwrap();
+        assert!(refresh_params(&mut h));
+        assert_eq!(h.spec.decl.argv, vec!["true"], "重读不能换可执行文件");
+
+        // 声明文件坏了（改到一半 / 手工写崩）：保留旧值并告知，绝不让开课失败。
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(!refresh_params(&mut h), "读不合法 JSON 要返回 false");
+        assert_eq!(h.spec.decl.params["vad"]["rms_open"], serde_json::json!(45), "坏声明不能把内存里的参数抹掉");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

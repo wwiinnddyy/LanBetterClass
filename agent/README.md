@@ -7,11 +7,17 @@
 
 | 目标 | 默认地址 | 用的接口 |
 | --- | --- | --- |
-| 采集客户端 `classagent-client serve` | `http://127.0.0.1:8786` | `/api/health`、`/api/lessons`、`/api/lesson/<id>/digest`、`/api/lesson/<id>/stats`、`/api/adapters`、`POST /api/adapter/<file>` |
+| 采集客户端 `classagent-client serve` | `http://127.0.0.1:8786` | `/api/health`、`/api/lessons`、`/api/lesson/<id>`、`/api/lesson/<id>/digest`、`/api/lesson/<id>/stats`、`/api/lesson/<id>/blob/<name>`、`/api/adapters`、`POST /api/adapter/<file>` |
 | 远程服务端 `classagent-server` | `http://127.0.0.1:8790` | `/health`、`/api/lessons`、`/api/lesson/<id>/ai-request` |
 
-三个标签页：**课程摘要**（读客户端 digest + stats）、**数据源配置**（列 adapters.d 并开关，
-需客户端以 `serve --allow-write` 启动）、**服务端**（看已收课程与服务端生成的 AI 请求单）。
+四个标签页：**课程摘要**（读客户端 digest + stats）、**录音**（话轮表 + 电平横条 + 回听）、
+**数据源配置**（列 adapters.d、开关与改采集参数，需客户端以 `serve --allow-write` 启动）、
+**服务端**（看已收课程与服务端生成的 AI 请求单）。
+
+回听不经 Rust 中转：`<audio src>` 直连 `/api/lesson/<id>/blob/<name>`。`http_get` 把响应体按
+文本读（`String::from_utf8_lossy`），WAV 字节过它一次就不是原样了；媒体元素发的是 no-cors
+请求，`csp: null` 下 WebView2 不拦。副作用：serve 不支持 Range，拖进度条会重取整段
+（单段由 `max_segment_ms` 封顶，一次点一段可控）。
 
 ## 设计约束
 
@@ -20,10 +26,23 @@
 - **零构建前端**：`ui/` 是纯静态 HTML/CSS/JS，无 Node/Vite —— 延续仓库"不装 node"的取向。
 - **HTTP 走 Rust 命令**：`http_get` / `http_post` 用 `std::net` 手搓（同 `client/src/push.rs`），
   原生 socket 不受 webview CORS 限制，也不必给 serve 加 CORS 头。仅面向本机/局域网 `http://`。
+  注意这两个命令只回**文本**：二进制（回听用的 WAV）必须走上面的直连路径，不能过它们。
+- **改参数是“下一节课生效”**：`serve` 与 `run` 是两个进程、中间没有 IPC，写接口只能改文件；
+  客户端在 `start_lesson` 重读声明并重发 `Configure`。页面上“磁盘声明”与“本节课实际生效”
+  并排显示，不一致就是“改好了，等下节课”的凭据。
 
 ## 本地跑（例外：GUI 只能本机运行）
 
 构建/校验一律走 CI（见 `.github/workflows/agent.yml`，Win+Linux 装 webview 依赖后 `cargo build`+`test`）。
+产物由该工作流的 `agent-<os>` artifact 交付，**不在本地构建**：
+
+```bash
+# 列出最近一次 agent 工作流的产物名
+gh run list --workflow agent --limit 1
+# 取回观察端可执行文件（RUN_ID 换成上面的编号）
+gh run download <RUN_ID> --name agent-windows-latest --dir .ci-artifacts
+```
+
 要在本机看界面：
 
 ```bash
@@ -39,3 +58,17 @@ cd agent/src-tauri && cargo tauri dev
 两端二进制取自 CI 产物（不在本地构建）：`gh run download <RUN_ID> --name bins-windows-latest --dir try`。
 不想手敲：`try\体验-三端联动.bat` 一把跑完 ①→② 链路 —— 起服务端 → 采集一节课 → push →
 再 push 验去重 → 起客户端 serve，两端就位后再开观察端即可。
+
+## 只能在真机上验的三项（CI 做不到，逐项目视）
+
+CI 能断接口、字段与字节，断不了“耳朵听得到”与“麦克风拔了”。以下三项改动了
+`agent/ui/` 或录音链路后必须跑一遍，并把结果写进 PR/提交说明：
+
+1. **回听**：取 `agent-windows-latest` 产物→ 起 `classagent-client serve --data … --adapters … --allow-write`
+   → 测试连接 → 课程摘要里选一节课 → 录音标签 → 点任意一段“回听”→ **听得到人声**，
+   `#playerName` 显示的段名与表里那行一致。听不到先看 Console 里的 404/403（没开 `--allow-write` 不影响读）。
+2. **调参真的下一节课生效**：把 `rms_open` 从 500 改成 45 → 保存（状态栏应写“下一节课生效”）
+   → 再开一节课 → 录音标签的段数与“短促丢弃”应明显随门限变化（真麦克风实测：默认 500 在
+   安静房间里切不出段，45 才能采到话轮）。“本节课实际生效”那一行应与新写的值一致。
+3. **掉帧要能被看见**：采集中拔麦/断设备 30 秒再插回 → 下课导出 → “掉帧”格大于 0 且标红，
+   摘要第五段出现“录音掉过采集帧：…时长类结论不成立”。没出现就是设备路径没把流错误报出来。

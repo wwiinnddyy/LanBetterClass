@@ -77,6 +77,40 @@ main { flex: 1; overflow: hidden; }
 .tab.active { display: flex; }
 .tab#tab-adapters.active { display: block; overflow: auto; padding: 16px 18px; }
 .tab#tab-server.active { display: block; overflow: auto; }
+.tab#tab-audio.active { display: block; overflow: auto; }
+
+/* 录音页 */
+.audio-pane { padding: 14px 18px; }
+.audio-top { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; margin-bottom: 10px; }
+.audio-player { display: flex; flex-direction: column; gap: 4px; min-width: 320px; flex: 1; }
+.audio-player audio { width: 100%; height: 36px; }
+.audio-pane .hint { padding: 0; }
+#audioFacts { margin-bottom: 12px; }
+.stat b.bad { color: var(--bad); }
+.digest .bad { color: var(--bad); }
+table summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
+table details > div { margin-top: 8px; }
+
+/* 电平横条：纯 CSS 宽度，不解码音频、不引 Web Audio。
+   两条竖线是开/关门限在同一标尺上的位置——段长不过线就是门限设高了。 */
+.bar { position: relative; width: 100%; min-width: 120px; height: 14px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+.bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); }
+.bar-line { position: absolute; top: -2px; bottom: -2px; width: 2px; }
+.bar-line.open { background: var(--ok); }
+.bar-line.close { background: var(--dim); }
+.bar-num { color: var(--dim); font-size: 12px; margin-left: 6px; }
+
+/* 调参区 */
+.tune { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 6px 0 12px; }
+.tune-grid { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+.tune-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--dim); }
+.tune-grid input[type="number"], .tune-grid input[type="text"] {
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--fg); padding: 5px 7px; width: 110px; font: 12.5px ui-monospace, Consolas, monospace;
+}
+.tune-eff { color: var(--dim); font-size: 11.5px; margin-top: 8px; }
+.tune-eff.pending { color: var(--bad); }
+.tune-check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); }
 
 .split { display: flex; height: calc(100% - 8px); }
 

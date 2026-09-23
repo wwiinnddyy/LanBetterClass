@@ -27,6 +27,13 @@ pub struct TrackItem {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
+    /// 音频段的自证数据（rms/peak/speech_ms…）。
+    ///
+    /// 只有报了的源才填：人话那句是给模型读的，但观察端要把每段电平画成横条、
+    /// 要把门限线叠上去，光靠"音频分段 1360ms"不够。没报的源这里就是没字段——
+    /// 不是 0（"没采"和"采到 0"是两回事）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -48,6 +55,11 @@ pub struct LessonStats {
     pub keyframes: usize,
     pub audio_chunks: usize,
     pub audio_bytes: u64,
+    /// 音频里真正是语音的时长总和。注意它来自 audio.chunk 本身而不是收课记录：
+    /// 适配器挂在半路时就没有 close，但已经落盘的段依然是证据。
+    pub audio_speech_ms: u64,
+    /// 采集流报错（掉帧）次数之和。大于 0 就不该拿时长下结论。
+    pub stream_errors: u64,
     pub eval_records: usize,
 }
 
@@ -65,6 +77,49 @@ pub struct SourceHealth {
     pub restarts: u64,
     /// 声明会产出却一条都没有——现场排障最先看这个。
     pub silent: bool,
+    /// 适配器自己报的收课统计（采了多少段、掉了几次帧）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<CloseStats>,
+    /// 这一节实际生效的采集参数（由 session.open 自述）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad: Option<VadSnapshot>,
+}
+
+/// 一个源在这一节课里报过的 `session.close` 汇总。
+///
+/// 多条会累加：将来支持当堂改门限后，一节课里会有好几代采集，每代一条 close。
+/// 不累加就只能看见最后一段，而"整节课到底采到了多少"恰恰是这句要回答的问题。
+#[derive(Debug, Clone, Serialize)]
+pub struct CloseStats {
+    /// 收到过几条 close。大于 1 意味着这一节用过不止一套参数。
+    pub closes: u32,
+    pub chunks: u64,
+    pub bytes: u64,
+    pub silent_chunks: u64,
+    pub voiced_ms: u64,
+    pub dropped_short: u64,
+    pub stream_errors: u64,
+    /// 采到的音频时长（与 wall_ms 对比才能知道源是不是加速的或停过）。
+    pub audio_ms: u64,
+    pub wall_ms: u64,
+    /// 适配器自己报的失败原因（例如 blob 写不进去）。
+    pub error: Option<String>,
+}
+
+/// 本节课真正生效的采集参数。磁盘上的声明可以被改，这份快照才是
+/// "刚才那 45 分钟是用什么采出来的"——调参后两者不一致就是"还没生效"的凭据。
+#[derive(Debug, Clone, Serialize)]
+pub struct VadSnapshot {
+    pub input: Option<String>,
+    pub device: Option<String>,
+    pub sample_rate: Option<u64>,
+    pub frame_ms: u64,
+    pub rms_open: f64,
+    pub rms_close: f64,
+    pub hangover_ms: u64,
+    pub preroll_ms: u64,
+    pub min_speech_ms: u64,
+    pub max_segment_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +146,8 @@ struct Accum {
     rejected: HashMap<String, u64>,
     dup: HashMap<String, u64>,
     restart: HashMap<String, u64>,
+    close: HashMap<String, CloseStats>,
+    vad: HashMap<String, VadSnapshot>,
 }
 
 /// 上一代事件流的结尾与下一代起点之间的留白。必须大于单条事件自身的跨度
@@ -201,6 +258,11 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                 if let (Some(w), Some(h)) = (w, h) {
                     canvas = Some((w, h));
                 }
+                // 录音源自述了本节实际生效的门限与设备。后到的覆盖先到的：一节课里
+                // 真重启过就该看最新那一代，而 close.closes > 1 会同时说明换过参数。
+                if let Some(v) = vad_snapshot(&env.payload) {
+                    acc.vad.insert(r.adapter_id.clone(), v);
+                }
             }
             kinds::INK_PAGE_ACTIVATE => {
                 if let Ok(p) = serde_json::from_value::<PageActivate>(env.payload.clone()) {
@@ -212,6 +274,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: format!("切到第 {} 页（page_id={}）", p.index + 1, p.page_id),
                         refs: vec![p.page_id],
+                        detail: None,
                     });
                 }
             }
@@ -229,6 +292,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: describe_stroke(&s, canvas),
                         refs: vec![s.stroke_id, s.page_id],
+                        detail: None,
                     });
                 }
             }
@@ -243,6 +307,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                     kind: env.kind.clone(),
                     text: format!("撤销/擦除一笔（{reason}）：{sid}"),
                     refs: vec![sid],
+                    detail: None,
                 });
             }
             kinds::ASR_UTTERANCE => {
@@ -270,6 +335,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: format!("{}：{}", u.speaker, u.text),
                         refs: Vec::new(),
+                        detail: None,
                     });
                 }
             }
@@ -277,6 +343,10 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                 if let Ok(c) = serde_json::from_value::<AudioChunk>(env.payload.clone()) {
                     stats.audio_chunks += 1;
                     audio_bytes += c.len;
+                    // 语音时长从段里加，不等 close：适配器挂在半路时根本没有收课记录，
+                    // 但已经落盘的段依旧是证据。
+                    stats.audio_speech_ms +=
+                        env.payload.get("speech_ms").and_then(|v| v.as_u64()).unwrap_or(0);
                     track.push(TrackItem {
                         t0_ms: c.t0_ms + base,
                         t1_ms: c.t0_ms + base + c.dur_ms,
@@ -284,6 +354,13 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: format!("音频分段 {}ms（{}，{} 字节）", c.dur_ms, c.codec, c.len),
                         refs: vec![c.blob],
+                        // 观察端要画电平横条与门限参考线，靠上面那句人话不够。只带真报了名的字段——
+                        // blob/len/codec/sample_rate/channels 是 AudioChunk 本身就要求的，
+                        // 再带一份进 detail 会让"这个源什么都没报"永远不成立。
+                        detail: pick(
+                            &env.payload,
+                            &["rms", "peak", "speech_ms", "trigger", "source"],
+                        ),
                     });
                 }
             }
@@ -298,6 +375,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: format!("屏幕关键帧（触发={}，{where_}）", k.trigger),
                         refs: vec![k.blob],
+                        detail: None,
                     });
                 }
             }
@@ -310,6 +388,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                     kind: env.kind.clone(),
                     text: format!("课件翻到第 {} 页", page.unwrap_or_else(|| "?".into())),
                     refs: Vec::new(),
+                    detail: None,
                 });
             }
             kinds::EVAL_RECORD => {
@@ -322,7 +401,20 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: format!("评估记录（{}）：{}", e.instrument, e.answers),
                         refs: Vec::new(),
+                        detail: None,
                     });
+                }
+            }
+            kinds::SESSION_CLOSE => {
+                // 和 core.respawn 同理：收课统计是关于采集过程本身的事实，不是课堂上
+                // 发生的事。塞进 track 还会顺手改掉 duration_ms（那是 max(t1)），
+                // 于是"课有多长"被"进程跑了多久"污染。所以它只进每个源的健康表。
+                let cur = close_of(&env.payload);
+                match acc.close.get_mut(&r.adapter_id) {
+                    Some(prev) => add_close(prev, cur),
+                    None => {
+                        acc.close.insert(r.adapter_id.clone(), cur);
+                    }
                 }
             }
             other => {
@@ -334,6 +426,7 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                     kind: env.kind.clone(),
                     text: format!("未识别事件 {other}：{}", short(&env.payload)),
                     refs: Vec::new(),
+                    detail: None,
                 });
             }
         }
@@ -342,6 +435,20 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
     stats.audio_bytes = audio_bytes;
     stats.pages_touched = pages.len();
     stats.longest_silence_ms = longest_silence;
+    // 掉帧次数只有一个来源：各源自己报的收课记录。再汇总进 stats，摘要与看板
+    // 就不必各自去遍历 sources 算一遍（那些地方很容易算不一样）。
+    stats.stream_errors = acc.close.values().map(|c| c.stream_errors).sum();
+    for (id, c) in acc.close.iter() {
+        if c.stream_errors > 0 {
+            warnings.push(format!(
+                "{id} 的录音掉过 {} 次采集帧：跨过这些点的时长类结论（谁讲了多久、讲授占比）不成立",
+                c.stream_errors
+            ));
+        }
+        if let Some(e) = &c.error {
+            warnings.push(format!("{id} 收课时报了错：{e}"));
+        }
+    }
     // 两个时钟分开记：轨道长度是"这节课有多长"，墙钟是"采集进程跑了多久"。
     // 真课堂上两者相等；采集器中途崩过、或机器睡过，它们就会岔开，
     // 那时任何拿墙钟当分母的占比都会算出离谱数字——所以这里宁肯显式报出来。
@@ -403,6 +510,8 @@ fn health(acc: &Accum) -> HashMap<String, SourceHealth> {
                 rejected: acc.rejected.get(id).copied().unwrap_or(0),
                 duplicates: acc.dup.get(id).copied().unwrap_or(0),
                 restarts: acc.restart.get(id).copied().unwrap_or(0),
+                close: acc.close.get(id).cloned(),
+                vad: acc.vad.get(id).cloned(),
                 silent: !declared.is_empty() && acc.accepted.get(id).copied().unwrap_or(0) == 0,
             },
         );
@@ -492,5 +601,236 @@ fn short(v: &serde_json::Value) -> String {
         format!("{t}…")
     } else {
         t
+    }
+}
+
+/// 只把"确实报了名"的字段带进 track。缺字段与字段为 0 是两回事：
+/// 前者是源没报，后者是真的采到了静音，把两者混成一个 0 就是在造证据。
+fn pick(src: &serde_json::Value, keys: &[&str]) -> Option<serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for k in keys {
+        if let Some(v) = src.get(*k) {
+            out.insert((*k).to_string(), v.clone());
+        }
+    }
+    (!out.is_empty()).then_some(serde_json::Value::Object(out))
+}
+
+/// 解析一条 `session.close`。缺字段一律当 0：a-audiofile 只报 chunks/bytes/wall_s，
+/// a-audio 报全套——同一份导出必须两种都能读，不能因谁少报一项就吞掉整条。
+fn close_of(p: &serde_json::Value) -> CloseStats {
+    let num = |k: &str| p.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let wall_s = p.get("wall_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    CloseStats {
+        closes: 1,
+        chunks: num("chunks"),
+        bytes: num("bytes"),
+        silent_chunks: num("silent_chunks"),
+        voiced_ms: num("voiced_ms"),
+        dropped_short: num("dropped_short"),
+        stream_errors: num("stream_errors"),
+        audio_ms: num("audio_ms"),
+        // 两个适配器对"跑了多久"用了不同单位：wall_ms（毫秒）与 wall_s（秒）。
+        wall_ms: num("wall_ms").max((wall_s * 1000.0) as u64),
+        error: p.get("error").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    }
+}
+
+/// 多条 close 累加。一节课里重启过就有好几代，每代只报自己那一段；
+/// 取最后一条会把"整节课采到了多少"错报成"最后一代采到了多少"。
+fn add_close(dst: &mut CloseStats, c: CloseStats) {
+    dst.closes += 1;
+    dst.chunks += c.chunks;
+    dst.bytes += c.bytes;
+    dst.silent_chunks += c.silent_chunks;
+    dst.voiced_ms += c.voiced_ms;
+    dst.dropped_short += c.dropped_short;
+    dst.stream_errors += c.stream_errors;
+    dst.audio_ms += c.audio_ms;
+    dst.wall_ms += c.wall_ms;
+    // 留住最早那条错：后面的失败往往是前一个的连带后果。
+    if dst.error.is_none() {
+        dst.error = c.error;
+    }
+}
+
+/// 从 `session.open` 的自述里取本节实际生效的采集参数。没有 vad 块就不造快照：
+/// 白板源的 open 里只有画布尺寸，硬凑一个全 0 的门限会让人以为它也在采音频。
+fn vad_snapshot(p: &serde_json::Value) -> Option<VadSnapshot> {
+    let v = p.get("vad")?;
+    let num = |k: &str| v.get(k).and_then(|x| x.as_f64());
+    Some(VadSnapshot {
+        input: p.get("input").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        device: p.get("device").and_then(|x| x.as_str()).map(|s| s.to_string()),
+        sample_rate: p.get("sample_rate").and_then(|x| x.as_u64()),
+        frame_ms: num("frame_ms")? as u64,
+        rms_open: num("rms_open")?,
+        rms_close: num("rms_close")?,
+        hangover_ms: num("hangover_ms")? as u64,
+        preroll_ms: num("preroll_ms")? as u64,
+        min_speech_ms: num("min_speech_ms")? as u64,
+        max_segment_ms: num("max_segment_ms")? as u64,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build;
+    use classagent_schema::{kinds, Envelope, LessonInfo, LessonMeta, RecordStatus, StoredRecord};
+
+    fn meta() -> LessonMeta {
+        LessonMeta {
+            info: LessonInfo {
+                lesson_id: "L-test".into(),
+                prev_lesson_id: None,
+                subject: None,
+                class: None,
+                teacher: None,
+                started_at_utc_ms: 0,
+                courseware: vec![],
+                blob_dir: "data/lessons/L-test/blobs".into(),
+                params: serde_json::json!({}),
+            },
+            started_core_mono_us: 0,
+            ended_core_mono_us: Some(60_000_000),
+            stop_reason: None,
+        }
+    }
+
+    fn rec(id: &str, seq: u64, kind: &str, t_ms: u64, payload: serde_json::Value) -> StoredRecord {
+        StoredRecord {
+            global_seq: seq,
+            adapter_id: id.into(),
+            t_core_utc_ms: 0,
+            t_core_mono_us: t_ms * 1_000,
+            status: RecordStatus::Accepted,
+            gap: None,
+            envelope: Envelope::new(seq, kind, Some(t_ms), payload),
+            raw: None,
+        }
+    }
+
+    fn open() -> StoredRecord {
+        rec(
+            "a-audio",
+            1,
+            kinds::SESSION_OPEN,
+            0,
+            serde_json::json!({
+                "input": "device", "device": "麦克风", "sample_rate": 48000,
+                "vad": {"frame_ms": 20, "rms_open": 45.0, "rms_close": 35.0, "hangover_ms": 500,
+                         "preroll_ms": 150, "min_speech_ms": 300, "max_segment_ms": 10000}
+            }),
+        )
+    }
+
+    fn chunk(seq: u64, t0: u64, extra: serde_json::Value) -> StoredRecord {
+        let mut p = serde_json::json!({
+            "blob": format!("audio-{t0:012}ms.wav"), "len": 130604, "codec": "pcm_s16le",
+            "sample_rate": 48000, "channels": 1, "t0_ms": t0, "dur_ms": 2000, "silent": false
+        });
+        for (k, v) in extra.as_object().into_iter().flat_map(|m| m.iter()) {
+            p[k] = v.clone();
+        }
+        rec("a-audio", seq, kinds::AUDIO_CHUNK, t0, p)
+    }
+
+    #[test]
+    fn close_is_no_longer_an_unrecognized_event() {
+        let records = vec![
+            open(),
+            chunk(2, 1_000, serde_json::json!({"rms": 117.0, "peak": 1193, "speech_ms": 1360, "trigger": "vad"})),
+            rec(
+                "a-audio",
+                3,
+                kinds::SESSION_CLOSE,
+                8_000_000,
+                serde_json::json!({"chunks": 1, "bytes": 130604, "voiced_ms": 1360, "dropped_short": 1,
+                                   "stream_errors": 0, "audio_ms": 7900, "wall_ms": 8000, "error": null}),
+            ),
+        ];
+        let p = build(&meta(), &records);
+        assert!(
+            !p.track.iter().any(|i| i.text.contains("未识别事件")),
+            "收课记录不该以「未识别事件 + 截断」的形式交给模型：{:?}",
+            p.track.iter().map(|i| i.text.clone()).collect::<Vec<_>>()
+        );
+        let h = &p.sources["a-audio"];
+        let c = h.close.clone().expect("收课统计要进健康表");
+        assert_eq!((c.closes, c.chunks, c.bytes, c.voiced_ms, c.dropped_short), (1, 1, 130604, 1360, 1));
+        assert_eq!(c.stream_errors, 0);
+        assert_eq!(p.stats.stream_errors, 0);
+        assert_eq!(p.stats.audio_speech_ms, 1360);
+        // 收课记录自己的时间戳是"进程跑了多久"，不能把它当成"课有多长"。
+        assert_eq!(p.stats.duration_ms, 3_000, "close 不能把时间轴拉长");
+        let v = h.vad.as_ref().expect("session.open 的自述要能被读出来");
+        assert_eq!((v.rms_open, v.rms_close, v.max_segment_ms), (45.0, 35.0, 10000));
+        assert_eq!(v.sample_rate, Some(48000));
+    }
+
+    #[test]
+    fn a_sparse_close_from_another_adapter_reads_as_zeros() {
+        // a-audiofile 只报 chunks/bytes/wall_s：少报的项必须是 0，而不是抱掉整条。
+        let records = vec![rec(
+            "a-audiofile",
+            1,
+            kinds::SESSION_CLOSE,
+            5_000,
+            serde_json::json!({"source": "a-audiofile", "chunks": 7, "bytes": 220500, "wall_s": 12.34}),
+        )];
+        let p = build(&meta(), &records);
+        let c = p.sources["a-audiofile"].close.clone().expect("残缺的 close 也是一条统计");
+        assert_eq!((c.chunks, c.bytes, c.wall_ms, c.voiced_ms, c.stream_errors), (7, 220500, 12340, 0, 0));
+        assert!(p.warnings.is_empty(), "没掉帧就不该报警：{:?}", p.warnings);
+    }
+
+    #[test]
+    fn several_generations_in_one_lesson_add_up() {
+        // 将来当堂改门限会一节课里好几代；取最后一条会把"整节课采到多少"错报成
+        // "最后一代采到多少"，而掉帧次数也会被吞掉一半。
+        let close = |seq: u64, chunks: u64, errs: u64| {
+            rec(
+                "a-audio",
+                seq,
+                kinds::SESSION_CLOSE,
+                seq * 1000,
+                serde_json::json!({"chunks": chunks, "bytes": chunks * 100, "voiced_ms": chunks * 900,
+                                   "dropped_short": 1, "stream_errors": errs, "audio_ms": 1000, "wall_ms": 1000}),
+            )
+        };
+        let p = build(&meta(), &vec![close(1, 2, 1), close(2, 3, 2)]);
+        let c = p.sources["a-audio"].close.clone().unwrap();
+        assert_eq!((c.closes, c.chunks, c.voiced_ms, c.stream_errors), (2, 5, 4500, 3));
+        assert_eq!(p.stats.stream_errors, 3);
+        assert!(
+            p.warnings.iter().any(|w| w.contains("掉过 3 次")),
+            "掉过帧必须写进「不能下什么结论」：{:?}",
+            p.warnings
+        );
+    }
+
+    #[test]
+    fn audio_detail_only_carries_reported_fields() {
+        let with = build(
+            &meta(),
+            &vec![chunk(1, 1_000, serde_json::json!({"rms": 251.0, "speech_ms": 8820}))],
+        );
+        let d = with.track[0].detail.clone().expect("报了 rms 就该看得见");
+        assert_eq!(d["rms"], serde_json::json!(251.0));
+        assert!(d.get("peak").is_none(), "没报的字段不能凭空补一个 0");
+
+        let without = build(&meta(), &vec![chunk(1, 1_000, serde_json::json!({}))]);
+        assert!(without.track[0].detail.is_none(), "旧版源什么都没报时不该出现空对象");
+        assert_eq!(without.stats.audio_speech_ms, 0);
+    }
+
+    #[test]
+    fn non_audio_rows_keep_their_exact_shape() {
+        // detail 用 skip_serializing_if：其他行的导出字节必须和加字段之前一样，
+        // 否则服务端存过的历史 payload 与新生成的会对不上。
+        let p = build(&meta(), &vec![rec("a-fake", 1, kinds::INK_STROKE_DELETE, 10, serde_json::json!({"reason": "undo"}))]);
+        let s = serde_json::to_string(&p.track[0]).unwrap();
+        assert!(!s.contains("detail"), "不该给非音频行凭空加字段：{s}");
+        assert!(!s.contains("close"));
     }
 }

@@ -21,6 +21,7 @@
 
   <nav class="tabs">
     <button data-tab="lessons" class="active">课程摘要</button>
+    <button data-tab="audio">录音</button>
     <button data-tab="adapters">数据源配置</button>
     <button data-tab="server">服务端</button>
   </nav>
@@ -39,9 +40,28 @@
       </div>
     </section>
 
+    <!-- 录音：读 /api/lesson/<id> 的 track（音频事实），回听直连 /api/lesson/<id>/blob/<name> -->
+    <section id="tab-audio" class="tab">
+      <div class="audio-pane">
+        <div class="audio-top">
+          <div class="audio-player">
+            <audio id="player" controls></audio>
+            <div id="playerName" class="hint">点下面任意一段回听（单段≤十秒量级，一次点一段）</div>
+          </div>
+          <div id="audioStats" class="stats"></div>
+        </div>
+        <div id="audioFacts" class="digest">先在“课程摘要”里选一节课。</div>
+        <table id="audioTable">
+          <thead><tr><th>起于</th><th>时长</th><th>语音</th><th>电平 rms</th><th>peak</th><th>段文件</th><th></th></tr></thead>
+          <tbody><tr><td colspan="7" class="empty">未加载</td></tr></tbody>
+        </table>
+        <div id="audioMore" class="hint"></div>
+      </div>
+    </section>
+
     <!-- 数据源配置：读 /api/adapters，写 POST /api/adapter/<file>（需客户端 --allow-write） -->
     <section id="tab-adapters" class="tab">
-      <p class="hint">开关数据源需客户端以 <code>serve --allow-write</code> 启动；改的是 <code>adapters.d/*.adapter.json</code>，下次启动或该源重启时生效。</p>
+      <p class="hint">开关数据源与改门限需客户端以 <code>serve --allow-write</code> 启动；改的是 <code>adapters.d/*.adapter.json</code>，<strong>下一节课生效</strong>（正在采集的这一节继续用开课时的参数）。只能改 enabled 与 params，可执行文件要人工改声明并重启客户端。</p>
       <table id="adapterTable">
         <thead><tr><th>ID</th><th>声明文件</th><th>平台</th><th>状态</th><th></th></tr></thead>
         <tbody><tr><td colspan="5" class="empty">点“测试连接”加载</td></tr></tbody>

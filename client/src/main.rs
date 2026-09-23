@@ -346,6 +346,14 @@ fn start_lesson(store: &mut Store, sup: &mut Supervisor, info: LessonInfo) {
     match store.begin_lesson(info) {
         Ok(()) => {
             eprintln!("[client] 开课 {id}，blob 目录 {}", store.active_lesson().map(|m| m.info.blob_dir.clone()).unwrap_or_default());
+            // 开课第一件事：把磁盘上的声明重读一遍并下发 Configure。看板的写接口只能改
+            // 文件（serve 与 run 是两个进程），所以"改完门限"就在这里被接上——它是整个
+            // 生效链上唯一不新增协议、不杀进程的一环。必须在 StartLesson 之前：
+            // 适配器是收到开课时才用 params 建会话的。
+            let reconfigured = sup.reload_params();
+            if !reconfigured.is_empty() {
+                eprintln!("[client] 已按最新声明重新配置 {} 个源：{}", reconfigured.len(), reconfigured.join(", "));
+            }
             let li = store.active_lesson().map(|m| m.info.clone());
             let mut sent = 0usize;
             for h in sup.ids() {

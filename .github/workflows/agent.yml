@@ -8,10 +8,17 @@ on:
     paths:
       - "agent/**"
       - ".github/workflows/agent.yml"
+      # 观察端直接读客户端的读路径与契约（/api/lesson/<id>、blob、adapters 返回体）。
+      # 这些变了必须重跑构建校验 —— 否则 UI 会对着一个已经变形的接口静默失效，
+      # 而 ci.yml 里的接口测试不会发现，因为它不编译 agent。
+      - "client/src/serve.rs"
+      - "shared/**"
   pull_request:
     paths:
       - "agent/**"
       - ".github/workflows/agent.yml"
+      - "client/src/serve.rs"
+      - "shared/**"
   workflow_dispatch:
 
 permissions:
@@ -49,5 +56,73 @@ jobs:
       - name: build
         run: cargo build --manifest-path agent/src-tauri/Cargo.toml --message-format=short
 
+      # 零构建的静态 UI 跑不了断言，而"静默失效"恰好是它最大的风险：后端改了键名、
+      # 表单加了个后端不认的框、id 打错一个字母——三者都不会让构建变红。
+      # 这一步用秒级文本断言钉住；界面本身只能在真机上验（见 agent/README.md）。
+      - name: ui guards (text only)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          app = open('agent/ui/app.js', encoding='utf-8').read()
+          html = open('agent/ui/index.html', encoding='utf-8').read()
+          rust = open('client/adapters/a-audio/src/vad.rs', encoding='utf-8').read() \
+               + open('client/adapters/a-audio/src/main.rs', encoding='utf-8').read()
+          fails = []
+          def need(c, m):
+              if not c:
+                  fails.append(m)
+
+          # 1) 回听必须走 webview 原生媒体元素。http_get 只回文本（from_utf8_lossy），
+          #    WAV 字节经过它一次就不是原来那份了——这条是回听能不能出声的分水岭。
+          need('<audio id="player"' in html, 'index.html 里没有 <audio id="player"> 元素，回听链路断了')
+          need('/blob/' in app, 'app.js 不再直连 blob 读路径：观察端听不到声音')
+          for i, line in enumerate(app.splitlines(), 1):
+              need(not ('/blob/' in line and ('http_get' in line or 'await get(' in line or 'post(' in line)),
+                   f'app.js:{i} 把 blob 交给了文本型命令，二进制会被毁：{line.strip()}')
+
+          # 2) UI 里出现的参数名必须是适配器真认识的键。名字错了不报错，只是静默无效。
+          names = set(re.findall(
+              r'"(rms_open|rms_close|hangover_ms|preroll_ms|min_speech_ms|max_segment_ms|frame_ms|sample_rate|emit_silence)"', app))
+          need(len(names) == 9, f'调参表单该覆盖 9 个参数，实得 {sorted(names)}')
+          known = set(re.findall(r'get\("([a-z_]+)"\)', rust))
+          need(names <= known, f'UI 里这些参数名后端不认：{sorted(names - known)}（后端={sorted(known)}）')
+
+          # 3) 引用的每个 #id 都得存在（typo 型静默失败：拿到 null 才发现）
+          ids = set()
+          for line in app.splitlines():
+              if ' + ' in line or '`' in line:
+                  continue          # 动态拼出来的选择器（#tab-<名字>）不在静态可断范围
+              ids |= set(re.findall(r'\$\("#([A-Za-z][A-Za-z0-9_-]*)"\)', line))
+          have = set(re.findall(r'id="([^"]+)"', html))
+          need(ids and not (ids - have), f'app.js 引用了 index.html 里不存在的 id：{sorted(ids - have)}')
+
+          # 4) 每个标签按钮都得有对应的 section，否则点上去就是一片空白
+          for tab in set(re.findall(r'data-tab="([^"]+)"', html)):
+              need(f'id="tab-{tab}"' in html, f'标签“{tab}”没有对应的 section#tab-{tab}')
+
+          # 5) “下一节课生效”是这个接口的真实语义，写错了就是骗教师
+          need('下一节课' in app and '下一节课' in html,
+               'UI 不再声明“下一节课生效”：要么文案改了，要么这条语义丢了——两者都得红')
+
+          if fails:
+              print('UI GUARD FAIL')
+              for f in fails:
+                  print('  -', f)
+              sys.exit(1)
+          print('UI GUARD OK  回听直连 blob / 9 个参数名对齐 / id 与标签页都在')
+          PY
+
       - name: test
         run: cargo test --manifest-path agent/src-tauri/Cargo.toml --message-format=short
+
+      # 产物必须能被取回：本机没有 cargo，也不在本地装 GUI 依赖（省磁盘）。
+      # 没有这一步，观察端就只能「编译通过」而永远没人真正点开过它。
+      - name: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.os }}
+          path: |
+            agent/src-tauri/target/debug/agent
+            agent/src-tauri/target/debug/agent.exe
+          if-no-files-found: error

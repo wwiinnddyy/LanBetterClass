@@ -32,6 +32,13 @@ gh run view --log-failed     # read failures
 gh run download <RUN_ID> --name bins-windows-latest --dir .ci-artifacts
 ```
 
+The observer app is built by its own workflow; its binary is never produced locally either:
+
+```bash
+gh run list --workflow agent --limit 1
+gh run download <RUN_ID> --name agent-windows-latest --dir .ci-artifacts
+```
+
 Treat a green `ci` run as the proof that code builds and works. Report results by citing the CI run,
 not a local build. `.ci-artifacts/` is scratch — keep it gitignored; do not overwrite the demo binaries
 in `try/` unless asked to refresh them.
@@ -64,6 +71,28 @@ stdout for a short quiet window after sending it and before closing the lesson. 
 `Stop` lands in `misc.ndjson`, i.e. outside the lesson — never defer a `session.close` or a final blob to
 `Stop`. This ordering once silently dropped a whole lesson's audio summary on real hardware.
 
+**What is a lesson fact vs. a capture-process fact**: `session.close` and `core.respawn` are facts about the
+capture process, not things that happened in the classroom, so `timeline::build` keeps them out of `track`
+and folds them into `sources[<id>].close` / `.restarts` instead. Putting them in `track` would also inflate
+`stats.duration_ms` (which is `max(t1_ms)`) into wall-clock process time. Per-segment numbers a teacher or
+model can actually read are `track[].detail` (`rms` / `peak` / `speech_ms`, only for sources that reported
+them — absent is not zero).
+
+### Configuration semantics (undocumented, this bites)
+
+`classagent-client serve --allow-write` accepts `POST /api/adapter/<file>` carrying **only** `enabled` and
+`params`; `argv` / `cwd` / `id` / `platforms` are refused with 400. `--allow-write` rests on "the teacher on
+this machine is trusted", and a writable `argv` would turn a configuration endpoint into local code
+execution. `params` is deep-merged, so submitting one `vad.rms_open` never deletes its sibling keys.
+
+Edits take effect **next lesson**, and that is structural rather than lazy: `serve` and `run` are separate
+processes with no IPC between them, so the write endpoint can only touch the file. `start_lesson` re-reads
+each declaration and re-sends `Configure` (`supervisor::reload_params`) before dispatching `StartLesson`;
+a crash-respawn re-reads too (`refresh_params`), so a source that dies never silently reverts to stale
+thresholds. Making a change land mid-lesson would mean kill + respawn of that one source, which splits the
+sentence being spoken and opens a second seq generation — deliberately out of scope. The observer UI shows
+"declared on disk" beside "actually in effect this lesson" precisely because those two can differ.
+
 `agent/` is deliberately **not** a member of the root workspace: it carries its own `[workspace]` so the
 heavyweight webview dependency tree never enters the client/server pipeline. It builds in its own
 workflow, `.github/workflows/agent.yml`.
@@ -80,6 +109,17 @@ workflow, `.github/workflows/agent.yml`.
   The mic path itself cannot be verified on a runner, so `a-audio` treats "no input device" as an observable
   outcome (the source is simply absent from the health table) and reports `stream_errors` in `session.close`
   rather than papering over dropouts; verify the device branch on a real machine.
+  Scenario ⑤ covers the teacher's whole tuning loop (POST the new threshold → next lesson reads it back from
+  the adapter's own `session.open` self-report), and ⑥ asserts a blob comes back as `audio/wav` with the same
+  bytes as on disk — that is what lets the observer play it back through a plain `<audio src>`.
+- `tools/ci-smoke.sh` also drives the write endpoint's four boundaries (params accepted, `argv` refused with
+  the file byte-identical, reversed hysteresis refused, non-object refused) and a same-process reload guard:
+  `stop` → edit `params` on disk → `start`, asserting the next lesson's segments are 8000 bytes instead of
+  32000. That pair is the only proof that "next lesson takes effect" is real rather than a slogan.
+- `.github/workflows/agent.yml` runs a seconds-level text guard over `agent/ui/` before building: playback
+  must go through `/blob/` and never through the text-only `http_get`, the nine tuning field names must match
+  the keys `a-audio` actually reads, and every `#id` referenced by `app.js` must exist in `index.html`. A typo
+  in any of those three fails silently at runtime, so it has to be loud here.
 - Renaming a module means touching `ci.yml` artifact paths, `tools/*.sh`, and `docs/*.html` — grep for the
   old binary name before considering a rename done.
 - `debug = 0` and `strip`/`lto` are set in the workspace `Cargo.toml` because disk size matters; do not

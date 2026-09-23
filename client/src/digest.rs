@@ -4,7 +4,7 @@
 //! 后半句比前半句重要——观察日志最容易出的事故是把"没采到"读成"没发生"。
 //! 看板与 CLI 共用这个函数，所以 CI 断言过的文本就是你在窗口里看到的文本。
 
-use crate::timeline::AiPayload;
+use crate::timeline::{AiPayload, CloseStats};
 use classagent_schema::kinds;
 use std::collections::BTreeMap;
 
@@ -30,6 +30,11 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
     let st = &p.stats;
     let dur = st.duration_ms.max(1);
     let mut out = String::new();
+
+    // 收课统计按源分键，这里汇总一次。没有 close（适配器挂在半路）就是 None，
+    // 不能当 0 —— "没报丢弃"与"没丢弃过"是两个结论，后者会被读成"门限是够的"。
+    let closes: Vec<&CloseStats> = p.sources.values().filter_map(|s| s.close.as_ref()).collect();
+    let dropped_short = (!closes.is_empty()).then(|| closes.iter().map(|c| c.dropped_short).sum::<u64>());
 
     // ---- 抬头 ----
     let title = format!(
@@ -76,9 +81,20 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         st.pages_touched, st.erases, st.keyframes
     ));
     out.push_str(&format!(
-        "  音频 {} 段 / {}；评估记录 {} 条\n\n",
+        "  音频 {} 段 / {}{}；评估记录 {} 条\n\n",
         st.audio_chunks,
         human(st.audio_bytes),
+        // 只有段数不够：采到的里面有多少真是讲话、有多少因为短于门限被丢掉，
+        // 决定的是"这套门限配得对不对"，也是调参时唯一能盯的两个数。
+        if st.audio_chunks == 0 {
+            String::new()
+        } else {
+            let mut s = format!("，语音 {}", hms(st.audio_speech_ms));
+            if let Some(d) = dropped_short {
+                s.push_str(&format!(" / 短促丢弃 {d} 段"));
+            }
+            s
+        },
         st.eval_records
     ));
 
@@ -166,6 +182,16 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         if s.restarts > 0 {
             flags.push(format!("重启 {} 次", s.restarts));
         }
+        if let Some(c) = &s.close {
+            if c.stream_errors > 0 {
+                flags.push(format!("掉帧 {} 次", c.stream_errors));
+            }
+            // 收课一次是常态，不占一行；多条才说明这一节用过不止一套参数，
+            // 那时长类数字是几段拼起来的，读摘要的人需要知道。
+            if c.closes > 1 {
+                flags.push(format!("收课 {} 次（中途换过采集）", c.closes));
+            }
+        }
         if s.over_budget > 0 {
             flags.push(format!("超预算 {} 条", s.over_budget));
         }
@@ -196,6 +222,9 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
     let mut gaps = Vec::new();
     if st.audio_chunks == 0 {
         gaps.push("没有录音：任何师生言语互动、提问层次、讲授占比都不成立");
+    }
+    if st.stream_errors > 0 {
+        gaps.push("录音掉过采集帧：跨过这些时刻的时长类结论（谁讲了多久、讲授占比）不成立");
     }
     if st.utterances == 0 {
         gaps.push("没有转写：有录音但还没出文字，话语类结论要等云端转写回灌");

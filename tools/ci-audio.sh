@@ -109,9 +109,56 @@ echo "--- ④ 课到一半下课：尾段与 session.close 是 StopLesson 之后
   < /dev/null > "$WORK/run4.log" 2>&1 || true
 "$CLIENT" export --data "$WORK/data-cutoff" --lesson "$LESSON" > "$WORK/export4.log" 2>&1 || true
 
-python3 - "$WORK" <<'PY'
+echo "--- ⑤ 教师改门限：写盘后下一节课真能读到 ---"
+# 这是教师真实走的那条路：看板进程里 POST 改声明 → 杀掉看板 → 下一节课用同一个目录开课。
+# 它钉的是 2.1（写盘与深合并）加上"磁盘 params → Configure → 适配器自述 → 导出"整条链；
+# "同一个进程里 stop → 改 → start 也要生效"那一半由 ci-smoke.sh 的 RELOAD 段负责。
+ADP5="$WORK/adp-reload"
+DATA5="$WORK/data-reload"
+rm -rf "$ADP5" "$DATA5"; mkdir -p "$ADP5" "$DATA5"
+cp "$WORK/adp/a-audio.adapter.json" "$ADP5/a-audio.adapter.json"
+cp "$WORK/adp/a-audio.adapter.json" "$WORK/adp5.before"
+PORT5=${PORT5:-8797}
+"$CLIENT" serve --data "$DATA5" --adapters "$ADP5" --port "$PORT5" --allow-write > "$WORK/serve5.log" 2>&1 &
+SRV5=$!
+trap 'kill $SRV5 2>/dev/null || true' EXIT
+for _ in $(seq 1 40); do
+  curl -fsS "http://127.0.0.1:$PORT5/api/health" >/dev/null 2>&1 && break
+  sleep 0.25
+done
+# 只提交 vad：其它参数（source/fixture/speed）必须原样留在磁盘上，否则这节课根本不会回放那份 wav
+HTTP5=$(curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"params":{"vad":{"rms_open":30000.0,"rms_close":29000.0}}}' \
+  -o "$WORK/p5.json" -w '%{http_code}' "http://127.0.0.1:$PORT5/api/adapter/a-audio.adapter.json")
+echo "$HTTP5" > "$WORK/p5.code"
+kill $SRV5 2>/dev/null || true; trap - EXIT
+"$CLIENT" run --data "$DATA5" --adapters "$ADP5" --lesson examples/lesson.demo.json --max-seconds 8 \
+  < /dev/null > "$WORK/run5.log" 2>&1 || true
+"$CLIENT" export --data "$DATA5" --lesson "$LESSON" > "$WORK/export5.log" 2>&1 || true
+
+echo "--- ⑥ 回听链路：blob 的 MIME 与字节 ---"
+# 观察端是拿 <audio src> 直连这个接口回听的（桌面进程不做二进制中转），
+# 所以 content_type 与字节完整性就是它能出声的全部条件。
+PORT6=${PORT6:-8798}
+WAV_NAME=$(basename "$(find "$WORK/data/lessons/$LESSON/blobs" -name '*.wav' | head -1)")
+"$CLIENT" serve --data "$WORK/data" --adapters "$WORK/adp" --port "$PORT6" > "$WORK/serve6.log" 2>&1 &
+SRV6=$!
+trap 'kill $SRV6 2>/dev/null || true' EXIT
+for _ in $(seq 1 40); do
+  curl -fsS "http://127.0.0.1:$PORT6/api/health" >/dev/null 2>&1 && break
+  sleep 0.25
+done
+BLOB_CT=$(curl -s -o "$WORK/blob.wav" -w '%{content_type}' \
+  "http://127.0.0.1:$PORT6/api/lesson/$LESSON/blob/$WAV_NAME")
+echo "$BLOB_CT" > "$WORK/blob.ctype"
+BLOB_N=$(curl -s -o /dev/null -w '%{http_code}' \
+  "http://127.0.0.1:$PORT6/api/lesson/$LESSON/blob/..%2Fmeta.json")
+echo "$BLOB_N" > "$WORK/blob.traversal"
+kill $SRV6 2>/dev/null || true; trap - EXIT
+
+python3 - "$WORK" "$WAV_NAME" <<'PY'
 import json, os, sys, wave
-work = sys.argv[1]
+work, wav_name = sys.argv[1], sys.argv[2]
 
 def need(cond, msg):
     if not cond:
@@ -201,6 +248,40 @@ audio_rows = [t for t in track if t['kind'] == 'audio.chunk']
 need(len(audio_rows) == 2, f'时间轴上要有两条音频记录：{len(audio_rows)}')
 need(all(t['refs'] for t in audio_rows), '时间轴上的音频记录必须带 blob 引用，否则人无法回听')
 
+# ---------- ①b 音频事实要能被看见：导出里的 close / vad / detail ----------
+# 这三个字段是观察端与摘要的全部依据。它们缺一个，教师看到的就只剩"采到了点什么"。
+c1 = health['a-audio'].get('close')
+need(isinstance(c1, dict), '收课统计没进健康表：那它就还只是 track 里一条被截断的"未识别事件"')
+if isinstance(c1, dict):
+    need(c1['closes'] == 1, f'一节课一条收课记录：{c1["closes"]}')
+    need(c1['chunks'] == cp['chunks'] == 2, f'导出里的段数要等于适配器自报的：{c1["chunks"]} vs {cp["chunks"]}')
+    need(c1['bytes'] == cp['bytes'] == total, f'导出里的字节要等于 blob 之和：{c1["bytes"]} vs {total}')
+    # 语音时长只有一个来源：适配器自己报的。服务端重算一遍就是第二份会漂移的算法。
+    need(c1['voiced_ms'] == cp['voiced_ms'], f'语音时长被算了两遍：{c1["voiced_ms"]} vs {cp["voiced_ms"]}')
+    need(c1['dropped_short'] == cp['dropped_short'] == 1, f'短促丢弃次数没透出：{c1["dropped_short"]}')
+    need(c1['stream_errors'] == 0, f'fixture 路径不该有掉帧：{c1["stream_errors"]}')
+    need(c1['audio_ms'] == cp['audio_ms'] and c1['wall_ms'] == cp['wall_ms'],
+         f'两个时钟必须原样透出：{c1["audio_ms"]}/{cp["audio_ms"]}，{c1["wall_ms"]}/{cp["wall_ms"]}')
+    need(c1['error'] is None, f'正向路径不该带错误：{c1["error"]}')
+    need(payload['stats']['stream_errors'] == 0, '掉帧总量要和各源一致')
+
+v1 = health['a-audio'].get('vad')
+need(isinstance(v1, dict), f'session.open 的自述没进健康表：{v1}')
+if isinstance(v1, dict):
+    need(v1['rms_open'] == 500.0, f'本节课生效的门限要看得见（"磁盘声明 vs 实际生效"右边那栏）：{v1}')
+    need(v1['rms_close'] == 300.0 and v1['min_speech_ms'] == 250 and v1['max_segment_ms'] == 8000, f'门限快照不全：{v1}')
+    need(v1['input'] == 'fixture' and v1['sample_rate'] == 16000, f'来路与真实采样率要在：{v1}')
+
+need(all(t.get('detail', {}).get('rms', 0) > 500 for t in audio_rows), '每段都要带 rms，否则电平横条画不出来')
+need(all('peak' in t.get('detail', {}) and 'speech_ms' in t.get('detail', {}) for t in audio_rows),
+     f'peak/speech_ms 是判断"这段是不是真话轮"的根据：{[t.get("detail") for t in audio_rows]}')
+need(payload['stats']['audio_speech_ms'] == sum(t['detail']['speech_ms'] for t in audio_rows),
+     '摘要里的语音时长必须等于逐段之和，不能有两个数')
+need(not any('未识别事件' in t['text'] for t in track),
+     f'出现了未识别事件，新 kind 没被接住：{[t["text"] for t in track if "未识别" in t["text"]]}')
+need(not any(t['kind'] == 'session.close' for t in track),
+     '收课统计进了 track：它是关于采集过程本身的事实，不是课堂上发生的事，还会把 duration_ms 顶成进程墙钟')
+
 # ---------- ② 门限之上没信号：源活着，但没有话轮 ----------
 ev2 = read_events(os.path.join(work, 'data-quiet'))
 ck2 = chunks_of(ev2)
@@ -212,6 +293,11 @@ need(len(c2) == 1, '源正常起止了，就该留下一条收课记录')
 need(c2[0]['envelope']['payload']['chunks'] == 0, '收课统计必须是 0')
 p2 = json.load(open(os.path.join(work, 'data-quiet', 'lessons', 'L-demo-0001', 'ai_payload.json'), encoding='utf-8'))
 need(p2['stats']['audio_chunks'] == 0, '统计里也要是 0')
+# 这条正面钉死"磁盘 params → Configure → 适配器自述 → 导出"：② 套把 rms_open 改成了 30000，
+# 导出里看到的就得是 30000。门限没传下去时它仍然是 ① 套的 500，两套房同一份代码跑不出这个差异。
+v2 = p2['sources']['a-audio'].get('vad')
+need(isinstance(v2, dict) and v2['rms_open'] == 30000.0, f'② 套写的是 30000，导出的却是：{v2}')
+need(p2['sources']['a-audio'].get('close', {}).get('chunks') == 0, '源活着但没采到话轮：收课统计得是 0 段')
 # 它确实跑起来了（open/close 都在），所以不该被标 silent——"源活着但没采到话轮"
 # 和"源根本没起来"是两种不同的故障，健康表不能把它们糊在一起。
 need(p2['sources']['a-audio']['silent'] is False,
@@ -252,5 +338,42 @@ misc4 = os.path.join(work, 'data-cutoff', 'misc.ndjson')
 need(not os.path.exists(misc4) or 'audio' not in open(misc4, encoding='utf-8').read(),
      '收尾事件不能写进 misc.ndjson')
 
-print('AUDIO OK  2 个话轮 / %d 字节 / 丢弃 1 记短促噪音 / 中途下课不丢收尾 / 无设备时不产出也不伪装' % total)
+# ---------- ⑤ 教师改门限：写盘后下一节课真能读到 ----------
+code5 = open(os.path.join(work, 'p5.code'), encoding='utf-8').read().strip()
+need(code5 == '200', f'写 params 没成功（{code5}）：{open(os.path.join(work, "p5.json"), encoding="utf-8").read()}')
+if code5 == '200':
+    need('下一节课' in json.load(open(os.path.join(work, 'p5.json'), encoding='utf-8')).get('note', ''),
+         '改完参数不告诉教师什么时候生效，等于让他猜')
+b5 = json.load(open(os.path.join(work, 'adp5.before'), encoding='utf-8'))
+a5 = json.load(open(os.path.join(work, 'adp-reload', 'a-audio.adapter.json'), encoding='utf-8'))
+need(a5['params']['vad']['rms_open'] == 30000.0, f'磁盘上没读到新门限：{a5["params"]["vad"]}')
+need(a5['params']['vad']['rms_close'] == 29000.0, '迟滞带下限也该跟着写进去')
+need(a5['argv'] == b5['argv'], f'写 params 碰到 argv 了：{a5["argv"]}')
+need(a5['enabled'] == b5['enabled'], '只提交 params 时不该动 enabled')
+for k in ('source', 'fixture', 'speed', 'emit_silence'):
+    need(a5['params'].get(k) == b5['params'].get(k), f'深合并丢了 params.{k}：{a5["params"]}')
+# 这一节真的是用新门限采的：适配器自己报了 30000，并且一段都没切出来
+p5 = json.load(open(os.path.join(work, 'data-reload', 'lessons', 'L-demo-0001', 'ai_payload.json'), encoding='utf-8'))
+need(p5['stats']['audio_chunks'] == 0,
+     f'门限改成 30000 后这节课该一段都没有，实得 {p5["stats"]["audio_chunks"]}：写盘没生效')
+v5 = p5['sources']['a-audio'].get('vad')
+need(isinstance(v5, dict) and v5['rms_open'] == 30000.0, f'适配器自述的门限必须是磁盘上那一份：{v5}')
+c5 = p5['sources']['a-audio'].get('close')
+need(isinstance(c5, dict) and c5['closes'] == 1 and c5['chunks'] == 0, f'收课统计不对：{c5}')
+
+# ---------- ⑥ 回听：blob 走 HTTP 的 MIME 与字节 ----------
+# 观察端用 webview 原生 <audio src> 直连这个接口，不经桌面进程的文本中转（那会毁掉字节）。
+ct = open(os.path.join(work, 'blob.ctype'), encoding='utf-8').read().strip()
+need(ct == 'audio/wav', f'回听能不能出声只看 content_type：{ct!r}')
+disk = os.path.join(work, 'data', 'lessons', 'L-demo-0001', 'blobs', wav_name)
+got = open(os.path.join(work, 'blob.wav'), 'rb').read()
+need(bool(wav_name) and os.path.getsize(disk) > 0, f'找不到 ① 段的 wav：{wav_name!r}')
+need(len(got) == os.path.getsize(disk), f'HTTP 取回 {len(got)} 字节，磁盘上 {os.path.getsize(disk)} 字节')
+need(got == open(disk, 'rb').read(), '取回的字节与磁盘上的不是同一份（文本中转会把 WAV 毁掉）')
+need(got[:4] == b'RIFF' and got[8:12] == b'WAVE', '回来的不是合法 wav 头')
+tr = open(os.path.join(work, 'blob.traversal'), encoding='utf-8').read().strip()
+need(tr in ('400', '404'), f'blob 读路径的穿越没挡住（{tr}）——观察端把 blob 名拼进 URL，这条是唯一护栏')
+
+print('AUDIO OK  2 个话轮 / %d 字节 / 丢弃 1 记短促噪音 / 中途下课不丢收尾 / 无设备时不产出也不伪装 / '
+      '改门限后下一节课读到 30000 / blob 能按 audio/wav 原样回听' % total)
 PY
