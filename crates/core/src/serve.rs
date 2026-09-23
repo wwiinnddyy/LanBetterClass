@@ -94,9 +94,18 @@ fn handle(cfg: &Config, mut req: Request) {
     let _ = req.respond(resp);
 }
 
+/// 前端优先读磁盘上的 `web/index.html`，读不到才用编进二进制的那份。
+/// 这样调样式不用重编译——但发布包里丢了文件也不会白屏。
+fn page() -> Vec<u8> {
+    match std::fs::read("web/index.html") {
+        Ok(b) if b.len() > 500 => b,
+        _ => PAGE.as_bytes().to_vec(),
+    }
+}
+
 fn route(cfg: &Config, path: &str) -> Reply {
     if path == "/" || path == "/index.html" {
-        return (200, HTML, PAGE.as_bytes().to_vec());
+        return (200, HTML, page());
     }
     if path == "/api/health" {
         return (

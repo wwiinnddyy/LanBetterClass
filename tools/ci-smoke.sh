@@ -255,6 +255,9 @@ print('== 服务实测 ==', json.dumps(codes, ensure_ascii=False))
 # 正常路径
 need(size('page.html') > 3000, '首页太小，前端可能没被 include_str! 编进二进制')
 need('课堂观察' in rd('page.html'), '首页缺标题')
+# 布局回归守卫：grid 子项不设 min-width:0 会把摘要横向裁掉（真截图时发现的）
+need('minmax(0,1fr)' in rd('page.html'), '主栏没锁 minmax(0,1fr)，宽内容会把摘要裁掉')
+need('min-width:0' in rd('page.html'), 'section 没设 min-width:0，同上')
 ls = json.loads(rd('lessons.json'))
 need(isinstance(ls, list) and len(ls) == 1, f'课程列表应 1 条，实际 {ls}')
 need(ls[0]['lesson_id'] == 'L-demo-0001' and ls[0]['class'] == '初二(3)班', '课程元信息（含中文）在 HTTP 链路上坏了')

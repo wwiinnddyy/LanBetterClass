@@ -23,7 +23,7 @@
   .live{width:7px;height:7px;border-radius:99px;background:var(--dim);display:inline-block}
   .live.on{background:var(--ok);box-shadow:0 0 0 3px #25401f;animation:p 1.6s infinite}
   @keyframes p{50%{opacity:.35}}
-  main{display:grid;grid-template-columns:260px 1fr;gap:0;min-height:calc(100vh - 57px)}
+  main{display:grid;grid-template-columns:260px minmax(0,1fr);gap:0;min-height:calc(100vh - 57px)}
   nav{border-right:1px solid var(--line);padding:10px;overflow:auto;max-height:calc(100vh - 57px)}
   nav h2{font-size:11px;text-transform:uppercase;color:var(--dim);margin:8px 6px 6px;letter-spacing:.08em}
   .les{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:var(--r);padding:8px 10px;color:inherit;cursor:pointer;margin-bottom:4px;font:inherit}
@@ -31,7 +31,7 @@
   .les.sel{background:var(--panel2);border-color:var(--line)}
   .les b{font-weight:600;display:block;font-size:13px}
   .les span{color:var(--dim);font-size:11px}
-  section{padding:16px 20px;overflow:auto;max-height:calc(100vh - 57px)}
+  section{padding:16px 20px;overflow:auto;max-height:calc(100vh - 57px);min-width:0}
   .tabs{display:flex;gap:4px;margin-bottom:14px;flex-wrap:wrap}
   .tab{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:5px 12px;font-size:13px;color:var(--dim);cursor:pointer;font-family:inherit}
   .tab.on{color:var(--fg);border-color:#39486a;background:var(--panel2)}
