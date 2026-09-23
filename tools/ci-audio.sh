@@ -8,7 +8,7 @@
 #    让 a-audio 走 fixture 回放，断真事件、真 blob、真导出。用 wave 而不是自研写头，
 #    是为了让适配器解析一个第三方写出来的文件——现场拿到的录音笔文件就是这种。
 #
-# 反向断言同样重要：把门限调到不可能越过，这节课必须"一段都没有"且被核心标成 silent。
+# 反向断言同样重要：把门限调到不可能越过，这节课必须"一段都没有"，同时留下一次正常开场。
 # "没采到"如果能被伪装成"采到了"，整条观察链就是假的。
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -70,8 +70,8 @@ quiet['params'].update({
 })
 json.dump(quiet, open(f'{work}/adp-quiet/a-audio.adapter.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 
-# 不设 fixture：走真设备路径。CI runner 上没有声卡，期望是"一条事件都不发"，
-# 从而被核心标成 silent；同时进程不能 panic，也不能伪造数据。
+# 不设 fixture：走真设备路径。CI runner 上没有声卡，期望是"一条事件都不发"——
+# 一个全程没发事件的源不会出现在健康表里；同时进程不能 panic，也不能伪造数据。
 nodev = json.loads(json.dumps(src))
 nodev['params'].pop('fixture', None)
 nodev['params'].update({'source': 'device'})
@@ -90,7 +90,7 @@ echo "--- ② 门限不可能越过：应一段都没有 ---"
   < /dev/null > "$WORK/run2.log" 2>&1 || true
 "$CLIENT" export --data "$WORK/data-quiet" --lesson "$LESSON" > "$WORK/export2.log" 2>&1 || true
 
-echo "--- ③ 真去开设备（runner 无声卡）：应一条事件不发并被标成 silent ---"
+echo "--- ③ 真去开设备（runner 无声卡）：应一条事件都不发 ---"
 "$CLIENT" run --data "$WORK/data-nodev" --adapters "$WORK/adp-nodev" --lesson examples/lesson.demo.json --max-seconds 6 \
   < /dev/null > "$WORK/run3.log" 2>&1 || true
 "$CLIENT" export --data "$WORK/data-nodev" --lesson "$LESSON" > "$WORK/export3.log" 2>&1 || true
@@ -161,6 +161,9 @@ cp = close[0]['envelope']['payload']
 need(cp['chunks'] == 2, f'收课统计与事件数要一致：{cp["chunks"]}')
 need(cp['bytes'] == total, f'字节统计要等于 blob 之和：{cp["bytes"]} vs {total}')
 need(cp.get('error') is None, f'正向路径不该带错误：{cp.get("error")}')
+# 回放路径没有真流，掉帧次数必须是 0；这个字段的存在本身也是契约——设备路径靠它把
+# "这节课的时长结论能不能下"暴露给课后复盘，而不是只在 stderr 里响一声。
+need(cp['stream_errors'] == 0, f'fixture 路径不该有流错误：{cp["stream_errors"]}')
 need(cp['dropped_short'] == 1, f'那记 60ms 关门声要被丢弃并计数：{cp["dropped_short"]}')
 need(2900 <= cp['voiced_ms'] <= 3600, f'语音总时长应接近 3.2s：{cp["voiced_ms"]}')
 # 采到的音频时长与进程墙钟是两件事：回放加速了，两者不该被混用。

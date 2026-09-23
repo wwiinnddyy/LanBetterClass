@@ -40,6 +40,7 @@ fn main() {
     let seq = Arc::new(AtomicU64::new(0));
     let lesson: Arc<Mutex<Option<LessonInfo>>> = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
+    let quit = Arc::new(AtomicBool::new(false));
     let cfg: Arc<Mutex<Value>> = Arc::new(Mutex::new(json!({})));
 
     let admit = Admit {
@@ -65,7 +66,7 @@ fn main() {
     write_raw(&out, &serde_json::to_string(&admit).unwrap_or_else(|_| "{}".into()));
 
     {
-        let (lesson, cfg, stop) = (lesson.clone(), cfg.clone(), stop.clone());
+        let (lesson, cfg, stop, quit) = (lesson.clone(), cfg.clone(), stop.clone(), quit.clone());
         std::thread::spawn(move || {
             let stdin = io::stdin();
             for line in stdin.lock().lines() {
@@ -86,7 +87,10 @@ fn main() {
                     }
                     Command::Stop { reason } => {
                         eprintln!("[{ID}] 退出：{reason}");
-                        std::process::exit(0);
+                        // 不在这里 exit：直接退出会把已攒下的尾段和 session.close 一起丢。
+                        // 只标个记号，交给主循环收完尾后再走。
+                        quit.store(true, Ordering::SeqCst);
+                        return;
                     }
                 }
             }
@@ -111,6 +115,10 @@ fn main() {
             s.pump(&out, &seq);
             closed = s.done;
         } else {
+            if quit.load(Ordering::SeqCst) {
+                // 没有进行中的会话：没人在等尾段，可以直接走。
+                break;
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
         if closed {
@@ -118,7 +126,17 @@ fn main() {
                 s.finish(&out, &seq);
             }
         }
+        if quit.load(Ordering::SeqCst) {
+            // 收课命令到了：先把当前会话刷完再退，不让最后一句消失在退出路上。
+            if let Some(mut s) = session.take() {
+                s.request_stop();
+                s.pump(&out, &seq);
+                s.finish(&out, &seq);
+            }
+            break;
+        }
     }
+    std::process::exit(0);
 }
 
 fn push(out: &Out, seq: &AtomicU64, kind: &str, t_event_ms: u64, payload: Value) {
@@ -271,6 +289,14 @@ impl Session {
         self.request_stop = true;
     }
 
+    /// 采集后端报过的流错误次数（掉帧、设备被拔等）。回放路径恒为 0。
+    fn stream_errors(&self) -> usize {
+        match &self.src {
+            Source::Device { _cap, .. } => _cap.stream_errors(),
+            _ => 0,
+        }
+    }
+
     fn pump(&mut self, out: &Out, seq: &AtomicU64) {
         if self.done {
             return;
@@ -357,6 +383,7 @@ impl Session {
             return;
         }
         let wall_ms = self.started.elapsed().as_millis() as u64;
+        let stream_errors = self.stream_errors();
         push(
             out,
             seq,
@@ -367,15 +394,18 @@ impl Session {
                 "chunks": self.chunks, "bytes": self.bytes, "silent_chunks": self.silent_chunks,
                 "voiced_ms": self.voiced_ms, "dropped_short": self.vad.dropped_short(),
                 "audio_ms": self.vad.consumed_ms(), "wall_ms": wall_ms,
+                // 掉过几次帧。必须进数据而不是只进 stderr：时长类结论（谁讲了多久、
+                // 课堂话语占比）在掉帧的课上是不成立的，课后复盘得能看到这个前提。
+                "stream_errors": stream_errors,
                 "error": self.failed,
             }),
         );
         match &self.failed {
             Some(e) => eprintln!("[{ID}] 本节课未产出音频（{e}）"),
             None => eprintln!(
-                "[{ID}] 收课 {}：{} 段 / {} 字节，语音 {}ms（静音段 {}，短促丢弃 {}）",
+                "[{ID}] 收课 {}：{} 段 / {} 字节，语音 {}ms（静音段 {}，短促丢弃 {}，流错误 {}）",
                 self.lesson_id, self.chunks, self.bytes, self.voiced_ms, self.silent_chunks,
-                self.vad.dropped_short()
+                self.vad.dropped_short(), stream_errors
             ),
         }
     }
