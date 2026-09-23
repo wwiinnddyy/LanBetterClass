@@ -90,6 +90,8 @@ for k in ('strokes', 'utterances', 'erases', 'pages_touched', 'audio_chunks', 'a
           'ink_time_ms', 'writing_while_speaking_ms', 'longest_silence_ms', 'duration_ms'):
     print(f'  {k} = {st[k]}')
 print(f'  events.ndjson 行数 = {lines}, track 条目 = {len(p["track"])}, blob 文件 = {len(blobs)}')
+max_t1 = max((i['t1_ms'] for i in p['track']), default=0)
+print(f'  track 最大时间 = {max_t1}ms')
 for k, v in sorted(src.items()):
     print(f'  源 {k}: events={v["events"]} 缺口={v["gaps"]} 丢失={v["lost_events"]} '
           f'重启={v["restarts"]} 重复={v["duplicates"]} 超预算={v["over_budget"]} 拒绝={v["rejected"]} silent={v["silent"]}')
@@ -115,6 +117,11 @@ need(src['a-audiofile']['over_budget'] > 0, '预算强制从没触发过，等�
 need(all(v['rejected'] == 0 for v in src.values()), '有事件解析失败')
 need(all(v['silent'] is False for v in src.values()), '有源声明了 produces 却全程无事件')
 need(st['writing_while_speaking_ms'] > 0, '墨迹与语音零重叠，时间轴对齐可疑')
+# 两条不变量：重叠量不可能超过总书写量；三次重启的三段课堂时间必须首尾相接而不是叠在一起
+need(st['writing_while_speaking_ms'] <= st['ink_time_ms'],
+     f"重叠 {st['writing_while_speaking_ms']}ms 超过总书写 {st['ink_time_ms']}ms，时间轴有代际叠加")
+need(max_t1 > 2_600_000,
+     f'track 最大只有 {max_t1}ms：三次重启的三段 sim 时间叠在了同一根轴上，没有按 respawn 边界接起来')
 need(any('a-whiteboard' in w for w in p['warnings']), '期望适配器缺失的告警没触发')
 need(200 <= st['longest_silence_ms'] <= 1000, f"最长静默 {st['longest_silence_ms']}ms 与模拟节奏(600ms)不符")
 

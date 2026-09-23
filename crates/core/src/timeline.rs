@@ -90,12 +90,35 @@ struct Accum {
     restart: HashMap<String, u64>,
 }
 
+/// 上一代事件流的结尾与下一代起点之间的留白，避免两段首尾同毫秒分不清。
+const RESUME_GAP_MS: u64 = 1_000;
+
 pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
     let mut acc = Accum::default();
     let mut track: Vec<TrackItem> = Vec::with_capacity(records.len());
     let mut stats = LessonStats::default();
     let mut warnings = Vec::new();
     let mut notes = Vec::new();
+
+    // 适配器重启后它自己的课堂时间会从 0 重新开始，直接落到同一根轴上就会和重启前
+    // 那段叠在一起（守卫里三次 spawn 就造出了 3 份重叠时间轴，把 overlap 顶到超过
+    // 总书写量）。用 core.respawn 的边界把每一代接在上一代之后。
+    let mut boundaries: HashMap<String, Vec<u64>> = HashMap::new();
+    for r in records {
+        if r.envelope.kind == kinds::CORE_RESPAWN {
+            if let Some(target) = r.envelope.payload.get("adapter_id").and_then(|v| v.as_str()) {
+                boundaries.entry(target.to_string()).or_default().push(r.t_core_mono_us);
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Cursor {
+        next: usize,
+        base: u64,
+        max_seen: u64,
+    }
+    let mut cursors: HashMap<String, Cursor> = HashMap::new();
 
     let mut origin: HashMap<String, u64> = HashMap::new();
     let mut canvas: Option<(f64, f64)> = None;
@@ -119,7 +142,26 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
             RecordStatus::Duplicate => *acc.dup.entry(r.adapter_id.clone()).or_insert(0) += 1,
         }
 
-        let t = t_of(r, meta, &mut origin);
+        let (t_local, is_local) = t_of(r, meta, &mut origin);
+        let base = {
+            let c = cursors.entry(r.adapter_id.clone()).or_default();
+            if let Some(v) = boundaries.get(&r.adapter_id) {
+                while c.next < v.len() && v[c.next] <= r.t_core_mono_us {
+                    c.base += c.max_seen + RESUME_GAP_MS;
+                    c.next += 1;
+                }
+            }
+            if is_local {
+                let e = c.base + t_local;
+                if e > c.max_seen {
+                    c.max_seen = e;
+                }
+                c.base
+            } else {
+                0
+            }
+        };
+        let t = base + t_local;
         let env = &r.envelope;
         match env.kind.as_str() {
             kinds::CORE_ADMIT => {
@@ -200,23 +242,24 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
             kinds::ASR_UTTERANCE => {
                 if let Ok(u) = serde_json::from_value::<Utterance>(env.payload.clone()) {
                     stats.utterances += 1;
-                    let dur = u.t1_ms.saturating_sub(u.t0_ms);
+                    let (t0, t1) = (u.t0_ms + base, u.t1_ms + base);
+                    let dur = t1.saturating_sub(t0);
                     if u.speaker.starts_with("teacher") {
                         stats.teacher_ms += dur;
                     } else {
                         stats.student_ms += dur;
                     }
-                    speech_spans.push((u.t0_ms, u.t1_ms));
+                    speech_spans.push((t0, t1));
                     if let Some(prev) = last_speech_end {
-                        let gap = u.t0_ms.saturating_sub(prev);
+                        let gap = t0.saturating_sub(prev);
                         if gap > longest_silence {
                             longest_silence = gap;
                         }
                     }
-                    last_speech_end = Some(last_speech_end.map(|p| p.max(u.t1_ms)).unwrap_or(u.t1_ms));
+                    last_speech_end = Some(last_speech_end.map(|p| p.max(t1)).unwrap_or(t1));
                     track.push(TrackItem {
-                        t0_ms: u.t0_ms,
-                        t1_ms: u.t1_ms,
+                        t0_ms: t0,
+                        t1_ms: t1,
                         source: r.adapter_id.clone(),
                         kind: env.kind.clone(),
                         text: format!("{}：{}", u.speaker, u.text),
@@ -229,8 +272,8 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                     stats.audio_chunks += 1;
                     audio_bytes += c.len;
                     track.push(TrackItem {
-                        t0_ms: c.t0_ms,
-                        t1_ms: c.t0_ms + c.dur_ms,
+                        t0_ms: c.t0_ms + base,
+                        t1_ms: c.t0_ms + base + c.dur_ms,
                         source: r.adapter_id.clone(),
                         kind: env.kind.clone(),
                         text: format!("音频分段 {}ms（{}，{} 字节）", c.dur_ms, c.codec, c.len),
@@ -243,8 +286,8 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                     stats.keyframes += 1;
                     let where_ = k.matched_page_id.clone().unwrap_or_else(|| "未匹配到课件页".to_string());
                     track.push(TrackItem {
-                        t0_ms: k.t_ms,
-                        t1_ms: k.t_ms,
+                        t0_ms: k.t_ms + base,
+                        t1_ms: k.t_ms + base,
                         source: r.adapter_id.clone(),
                         kind: env.kind.clone(),
                         text: format!("屏幕关键帧（触发={}，{where_}）", k.trigger),
@@ -267,8 +310,8 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                 if let Ok(e) = serde_json::from_value::<EvalRecord>(env.payload.clone()) {
                     stats.eval_records += 1;
                     track.push(TrackItem {
-                        t0_ms: e.t_ms,
-                        t1_ms: e.t_ms,
+                        t0_ms: e.t_ms + base,
+                        t1_ms: e.t_ms + base,
                         source: r.adapter_id.clone(),
                         kind: env.kind.clone(),
                         text: format!("评估记录（{}）：{}", e.instrument, e.answers),
@@ -352,15 +395,16 @@ fn health(acc: &Accum) -> HashMap<String, SourceHealth> {
 
 /// 时间归一：优先用事件自带的课堂毫秒，其次用该适配器自己的单调钟相对第一条的偏移，
 /// 最后才退回核心接收时间（它含投递抖动，只够用来排序，不够做对齐）。
-fn t_of(r: &StoredRecord, meta: &LessonMeta, origin: &mut HashMap<String, u64>) -> u64 {
+/// 第二个返回值表示这个时间是不是"适配器自己的"——只有它才需要按重启边界整体平移。
+fn t_of(r: &StoredRecord, meta: &LessonMeta, origin: &mut HashMap<String, u64>) -> (u64, bool) {
     if let Some(t) = r.envelope.t_event_ms {
-        return t;
+        return (t, true);
     }
     if r.envelope.t_mono_us > 0 {
         let first = *origin.entry(r.adapter_id.clone()).or_insert(r.envelope.t_mono_us);
-        return r.envelope.t_mono_us.saturating_sub(first) / 1000;
+        return (r.envelope.t_mono_us.saturating_sub(first) / 1000, true);
     }
-    r.t_core_mono_us.saturating_sub(meta.started_core_mono_us) / 1000
+    (r.t_core_mono_us.saturating_sub(meta.started_core_mono_us) / 1000, false)
 }
 
 fn describe_stroke(s: &StrokeCommit, canvas: Option<(f64, f64)>) -> String {
