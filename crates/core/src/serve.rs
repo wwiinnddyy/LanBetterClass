@@ -64,9 +64,8 @@ fn handle(cfg: &Config, mut req: Request) {
         Some((p, _)) => p.to_string(),
         None => url,
     };
-    // tiny_http 的 method() 返回的是 &[Method]，不是 &Method。
-    let is_get = matches!(req.method().first(), Some(&Method::Get));
-    let is_post = matches!(req.method().first(), Some(&Method::Post));
+    let is_get = matches!(req.method(), &Method::Get);
+    let is_post = matches!(req.method(), &Method::Post);
 
     let reply = if is_get {
         route(cfg, &path)
