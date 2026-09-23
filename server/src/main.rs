@@ -1,5 +1,5 @@
-//! 远程服务端：接收采集客户端（classagent-core）推来的 `ai_payload`，落盘去重，
-//! 并生成一份确定性的"交给 AI"请求单。与本地看板（core 的 serve）同源：
+//! 远程服务端：接收采集客户端（classagent-client）推来的 `ai_payload`，落盘去重，
+//! 并生成一份确定性的"交给 AI"请求单。与本地看板（client 的 serve）同源：
 //! tiny_http，默认只绑 127.0.0.1；生产用反向代理加 TLS 并配 `--token`。
 //!
 //! 边界：服务端到此为止。真正的 ASR / LLM 调用是这一步之外的下游——这里不接模型、

@@ -387,7 +387,7 @@ pub struct LessonUpload {
     pub proto: u8,
     pub lesson_id: String,
     pub uploaded_at_utc_ms: u64,
-    /// 采集端自述，例如 "classagent-core 0.1.0"。
+    /// 采集端自述，例如 "classagent-client 0.1.0"。
     pub source: String,
     /// `AiPayload` 的 JSON 形态。服务端不重解析其内部结构，只透传与落盘。
     pub ai_payload: serde_json::Value,

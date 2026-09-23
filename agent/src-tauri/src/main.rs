@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! agent · 课堂观察端。把原先藏在客户端 `core serve` 里的本地看板抽成独立桌面 App：
-//! 连接采集客户端（core serve）与远程服务端（classagent-server），做可视化配置与查看。
+//! agent · 课堂观察端。把原先藏在客户端 `classagent-client serve` 里的本地看板抽成独立桌面 App：
+//! 连接采集客户端（client）与远程服务端（server），做可视化配置与查看。
 //!
 //! 所有 HTTP 走这里的 Rust 命令（`http_get` / `http_post`），前端 `invoke` 调用：
 //! 原生 socket 请求不受 webview 同源/CORS 限制，也不必给 serve 加 CORS 头。

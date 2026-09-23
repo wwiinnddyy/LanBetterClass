@@ -112,7 +112,7 @@ fn route(cfg: &Config, path: &str) -> Reply {
             200,
             JSON,
             to_vec(&json!({
-                "server": "classagent-core serve",
+                "server": "classagent-client serve",
                 "proto": classagent_schema::PROTO,
                 "listen": cfg.listen,
                 "data_dir": cfg.data.to_string_lossy(),

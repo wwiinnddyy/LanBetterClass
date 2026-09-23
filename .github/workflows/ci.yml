@@ -55,7 +55,7 @@ jobs:
         with:
           name: bins-${{ matrix.os }}
           path: |
-            target/debug/classagent-core*
+            target/debug/classagent-client*
             target/debug/classagent-server*
             target/debug/a-fake*
             target/debug/a-audiofile*

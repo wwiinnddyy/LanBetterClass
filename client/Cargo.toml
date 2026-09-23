@@ -1,16 +1,16 @@
 [package]
-name = "classagent-core"
-description = "采集核心：适配器监督、时钟、落盘、投递、AI 载荷导出"
+name = "classagent-client"
+description = "采集客户端：适配器监督、时钟、落盘、投递、AI 载荷导出与向服务端推送"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "classagent-core"
+name = "classagent-client"
 path = "src/main.rs"
 
 [lib]
-name = "classagent_core"
+name = "classagent_client"
 path = "src/lib.rs"
 
 [dependencies]

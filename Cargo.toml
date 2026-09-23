@@ -1,6 +1,11 @@
+# ClassAgent —— 三端同仓，物理目录即模块边界：
+#   client/  采集客户端（classagent-client；含 client/adapters 数据源子进程）
+#   server/  远程服务端（classagent-server）
+#   agent/   观察端（Tauri，独立 workspace，见 .github/workflows/agent.yml）
+#   shared/  三端共享契约（crate 名仍为 classagent-schema，保持稳定 import）
 [workspace]
 resolver = "2"
-members = ["crates/schema", "crates/core", "crates/server", "adapters/a-fake", "adapters/a-audiofile"]
+members = ["shared", "client", "server", "client/adapters/a-fake", "client/adapters/a-audiofile"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,7 +15,7 @@ license = "MIT"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-classagent-schema = { path = "crates/schema" }
+classagent-schema = { path = "shared" }
 # 只用它起本地看板服务。选 tiny_http 而不是 axum/hyper：不引入 async 运行时，
 # 依赖树小得多，而这台机器的磁盘和内存都是约束。
 tiny_http = "0.12"

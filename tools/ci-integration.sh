@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 端到端集成守卫：客户端(classagent-core) → 远程服务端(classagent-server) 的 HTTP 链路。
+# 端到端集成守卫：客户端(classagent-client) → 远程服务端(classagent-server) 的 HTTP 链路。
 # 与 ci-smoke.sh 一样，Linux 与 Windows 两个 runner 各跑一遍同一份脚本。
 # 断的是真行为：真实 push（走 std::net 手搓的 HTTP/1.1 客户端）打到 tiny_http 服务端，
 # 落盘去重、AI 请求单生成、token 鉴权、路径穿越防护。本机磁盘不允许本地构建，只在 CI 上跑。
@@ -23,7 +23,7 @@ LESSON=L-demo-0001
 PORT=${PORT:-8899}
 TOKEN=ci-secret-token
 
-CORE="$BIN/classagent-core$EXE"
+CORE="$BIN/classagent-client$EXE"
 SERVER="$BIN/classagent-server$EXE"
 [ -f "$CORE" ]   || { echo "FAIL 找不到 $CORE"; exit 1; }
 [ -f "$SERVER" ] || { echo "FAIL 找不到 $SERVER"; exit 1; }

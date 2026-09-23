@@ -34,7 +34,7 @@ MAX_SECONDS=${MAX_SECONDS:-20}
 
 rm -rf "$WORK"
 mkdir -p "$ADP" "$DATA"
-CORE="$BIN/classagent-core$EXE"
+CORE="$BIN/classagent-client$EXE"
 [ -f "$CORE" ] || { echo "FAIL 找不到 $CORE"; exit 1; }
 
 # 300 秒 16kHz 单声道 s16le 正弦波。故意长到能在 1 秒墙钟内灌完，
@@ -140,7 +140,7 @@ print('SMOKE OK')
 PY
 
 # 摘要层：看板显示的就是这段文本，所以它先于 UI 被断言。
-"$BIN/classagent-core" digest --data "$DATA" --lesson "$LESSON" | tee "$WORK/digest.txt"
+"$BIN/classagent-client" digest --data "$DATA" --lesson "$LESSON" | tee "$WORK/digest.txt"
 
 python3 - "$WORK/digest.txt" <<'PY'
 import sys
@@ -177,7 +177,7 @@ PY
 # 开着课却一个数据源都没有：必须几秒内喊出来。安静地产出一节空课是现场最贵的失败。
 EMPTY=$WORK/empty-adapters
 rm -rf "$EMPTY" /tmp/ci-no-src; mkdir -p "$EMPTY"
-"$BIN/classagent-core" run --data /tmp/ci-no-src --adapters "$EMPTY" --lesson examples/lesson.demo.json --max-seconds 8 \
+"$BIN/classagent-client" run --data /tmp/ci-no-src --adapters "$EMPTY" --lesson examples/lesson.demo.json --max-seconds 8 \
   < /dev/null > "$WORK/no-source.log" 2>&1 || true
 if grep -q '仍收到 0 条事件' "$WORK/no-source.log"; then
   echo "OK 空源告警已触发"
@@ -192,7 +192,7 @@ fi
 PORT=${PORT:-8799}
 code() { curl -s --path-as-is -o "$2" -w '%{http_code}' "$1"; }   # code <url> <outfile>
 
-"$BIN/classagent-core" serve --data "$DATA" --adapters "$ADP" --port "$PORT" > "$WORK/serve.log" 2>&1 &
+"$BIN/classagent-client" serve --data "$DATA" --adapters "$ADP" --port "$PORT" > "$WORK/serve.log" 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null || true' EXIT
 for _ in $(seq 1 40); do
@@ -220,7 +220,7 @@ kill $SRV 2>/dev/null || true; trap - EXIT
 
 # 第二个实例：开写。改的是本次 CI 生成的声明副本，不动仓库。
 PORT2=$((PORT + 1))
-"$BIN/classagent-core" serve --data "$DATA" --adapters "$ADP" --port "$PORT2" --allow-write > "$WORK/serve2.log" 2>&1 &
+"$BIN/classagent-client" serve --data "$DATA" --adapters "$ADP" --port "$PORT2" --allow-write > "$WORK/serve2.log" 2>&1 &
 SRV2=$!
 trap 'kill $SRV2 2>/dev/null || true' EXIT
 for _ in $(seq 1 20); do

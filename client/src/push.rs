@@ -20,7 +20,7 @@ pub fn post_json(addr: &str, path: &str, body: &[u8], token: Option<&str>) -> st
         None => String::new(),
     };
     let head = format!(
-        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nUser-Agent: classagent-core\r\n\
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nUser-Agent: classagent-client\r\n\
          Content-Type: application/json\r\n{token_line}Content-Length: {}\r\n\
          Connection: close\r\nAccept: application/json\r\n\r\n",
         body.len()

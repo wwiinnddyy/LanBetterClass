@@ -4,7 +4,7 @@
 //! AI 能消费的 `ai_payload.json`。平台差异（DXGI / PipeWire / WASAPI）一律关在
 //! 适配器里，所以新增一个学校环境不需要重编译这里。
 
-use classagent_core::{digest, protocol, push, serve, store, supervisor, timeline};
+use classagent_client::{digest, protocol, push, serve, store, supervisor, timeline};
 
 use classagent_schema::{kinds, Admit, Command, Envelope, LessonInfo, LessonUpload, PROTO};
 use protocol::shorten;
@@ -30,7 +30,7 @@ fn main() {
         "serve" => serve_cmd(opts, data),
         "push" => push_cmd(opts, data),
         other => {
-            eprintln!("未知命令 {other}\n用法：classagent-core [run|status|export|digest|serve] [--data DIR] [--adapters DIR]");
+            eprintln!("未知命令 {other}\n用法：classagent-client [run|status|export|digest|serve|push] [--data DIR] [--adapters DIR]");
             eprintln!("  run    --lesson FILE.json  启动即开课；控制台可输入 start/stop/status/quit");
             eprintln!("         --max-seconds N     N 秒后自动收尾退出（脚本化验证用）");
             eprintln!("  export --lesson ID [--out PATH]   导出 AI 载荷");
@@ -44,7 +44,7 @@ fn main() {
         }
     };
     if let Err(e) = result {
-        eprintln!("[core] 错误：{e}");
+        eprintln!("[client] 错误：{e}");
         std::process::exit(1);
     }
 }
@@ -93,17 +93,17 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     let mut store = Store::open(&data)?;
     let (specs, skipped) = discover(&adapters_dir)?;
     for s in &skipped {
-        eprintln!("[core] 未装载 {s}");
+        eprintln!("[client] 未装载 {s}");
     }
     if specs.is_empty() {
-        eprintln!("[core] {} 下没有启用的 *.adapter.json，将只等待控制台指令", adapters_dir.display());
+        eprintln!("[client] {} 下没有启用的 *.adapter.json，将只等待控制台指令", adapters_dir.display());
     }
 
     let (tx, rx): (Sender<Inbound>, Receiver<Inbound>) = mpsc::channel();
     let mut sup = Supervisor::new(tx.clone(), store.root.clone());
     for spec in specs {
         if let Err(e) = sup.launch(spec) {
-            eprintln!("[core] {e}");
+            eprintln!("[client] {e}");
         }
     }
 
@@ -134,12 +134,12 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
             Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(v) => Some(lesson_from_value(&v, None)),
                 Err(e) => {
-                    eprintln!("[core] {f} 不是合法 JSON（{e}），忽略");
+                    eprintln!("[client] {f} 不是合法 JSON（{e}），忽略");
                     None
                 }
             },
             Err(e) => {
-                eprintln!("[core] 读不到 {f}（{e}），忽略");
+                eprintln!("[client] 读不到 {f}（{e}），忽略");
                 None
             }
         },
@@ -164,16 +164,16 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
                             match sup.handle(&adapter_id) {
                                 Some(h) => {
                                     if let Err(e) = h.admit(&a) {
-                                        eprintln!("[core] {adapter_id} 拒绝装载：{e}");
+                                        eprintln!("[client] {adapter_id} 拒绝装载：{e}");
                                     }
                                 }
-                                None => eprintln!("[core] {adapter_id} 报了 Admit 但没有对应句柄，忽略"),
+                                None => eprintln!("[client] {adapter_id} 报了 Admit 但没有对应句柄，忽略"),
                             }
                             if let Some(h) = sup.find(&adapter_id) {
                                 if h.status == Status::Ready {
                                     let produces = h.manifest.clone().map(|m| m.produces).unwrap_or_default();
                                     let needs = h.manifest.clone().map(|m| m.needs_lesson).unwrap_or(false);
-                                    eprintln!("[core] {adapter_id} 就绪 produces={:?} needs_lesson={needs}", produces.join(","));
+                                    eprintln!("[client] {adapter_id} 就绪 produces={:?} needs_lesson={needs}", produces.join(","));
                                     if !needs || store.active_lesson().is_some() {
                                         if let Some(li) = store.active_lesson().map(|m| m.info.clone()) {
                                             let _ = sup.send(&adapter_id, Command::StartLesson { lesson: li });
@@ -182,33 +182,33 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
                                 }
                             }
                         }
-                        Err(e) => eprintln!("[core] {adapter_id} 首行不是 Admit：{}", shorten(&e.to_string(), 200)),
+                        Err(e) => eprintln!("[client] {adapter_id} 首行不是 Admit：{}", shorten(&e.to_string(), 200)),
                     }
                 } else {
                     match serde_json::from_value::<Envelope>(value.clone()) {
                         Ok(env) => {
                             let out = store.append(&adapter_id, &env)?;
                             if let Some(lost) = out.gap {
-                                eprintln!("[core] {adapter_id} seq 空洞：丢 {lost} 条（status={:?}）", out.status);
+                                eprintln!("[client] {adapter_id} seq 空洞：丢 {lost} 条（status={:?}）", out.status);
                             }
                             if out.kill {
-                                eprintln!("[core] {adapter_id} 超出预算，已终止且不再拉起");
+                                eprintln!("[client] {adapter_id} 超出预算，已终止且不再拉起");
                                 sup.kill(&adapter_id, "超出预算");
                             }
                         }
                         Err(e) => {
                             let _ = store.append_rejected(&adapter_id, &value, &e.to_string());
-                            eprintln!("[core] {adapter_id} 一条事件解析失败，已原样保留");
+                            eprintln!("[client] {adapter_id} 一条事件解析失败，已原样保留");
                         }
                     }
                 }
             }
             Ok(Inbound::Eof { adapter_id }) => {
                 // 只报不杀：真正判活死交给 reap()，避免把"自己退出"的适配器误判成崩溃。
-                eprintln!("[core] {adapter_id} 关闭了 stdout");
+                eprintln!("[client] {adapter_id} 关闭了 stdout");
             }
             Ok(Inbound::Err { adapter_id, msg }) => {
-                eprintln!("[core] {adapter_id} 读取错误：{}", shorten(&msg, 200));
+                eprintln!("[client] {adapter_id} 读取错误：{}", shorten(&msg, 200));
             }
             Ok(Inbound::Console { line }) => {
                 let line = line.trim().to_string();
@@ -231,7 +231,7 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
                     }
                     "status" => print_status(&store, &sup),
                     "quit" | "exit" => quit = true,
-                    other => eprintln!("[core] 未知指令 {other}（可用：start/stop/status/quit）"),
+                    other => eprintln!("[client] 未知指令 {other}（可用：start/stop/status/quit）"),
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -240,19 +240,19 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
 
         for (id, code) in sup.reap() {
             let will_restart = sup.find(&id).map(|h| h.status == Status::Backoff).unwrap_or(false);
-            eprintln!("[core] {id} 退出（{code:?}）{}", if will_restart { "，退避后重启" } else { "" });
+            eprintln!("[client] {id} 退出（{code:?}）{}", if will_restart { "，退避后重启" } else { "" });
             if will_restart {
                 store.note_respawn(&id)?;
             }
         }
         for up in sup.respawn_due() {
-            eprintln!("[core] {up} 已重启");
+            eprintln!("[client] {up} 已重启");
         }
         store.tick()?;
 
         if let Some(d) = deadline {
             if Instant::now() >= d {
-                eprintln!("[core] 到达 --max-seconds，收尾");
+                eprintln!("[client] 到达 --max-seconds，收尾");
                 stop_lesson(&mut store, &mut sup, "max_seconds");
                 quit = true;
             }
@@ -268,7 +268,7 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     }
     sup.shutdown("core 退出");
     store.flush()?;
-    eprintln!("[core] 已收尾，数据在 {}", store.root.display());
+    eprintln!("[client] 已收尾，数据在 {}", store.root.display());
     Ok(())
 }
 
@@ -276,7 +276,7 @@ fn start_lesson(store: &mut Store, sup: &mut Supervisor, info: LessonInfo) {
     let id = info.lesson_id.clone();
     match store.begin_lesson(info) {
         Ok(()) => {
-            eprintln!("[core] 开课 {id}，blob 目录 {}", store.active_lesson().map(|m| m.info.blob_dir.clone()).unwrap_or_default());
+            eprintln!("[client] 开课 {id}，blob 目录 {}", store.active_lesson().map(|m| m.info.blob_dir.clone()).unwrap_or_default());
             let li = store.active_lesson().map(|m| m.info.clone());
             let mut sent = 0usize;
             for h in sup.ids() {
@@ -286,9 +286,9 @@ fn start_lesson(store: &mut Store, sup: &mut Supervisor, info: LessonInfo) {
                     }
                 }
             }
-            eprintln!("[core] StartLesson 已送达 {sent} 个适配器");
+            eprintln!("[client] StartLesson 已送达 {sent} 个适配器");
         }
-        Err(e) => eprintln!("[core] 开课失败：{e}"),
+        Err(e) => eprintln!("[client] 开课失败：{e}"),
     }
 }
 
@@ -297,20 +297,20 @@ fn stop_lesson(store: &mut Store, sup: &mut Supervisor, reason: &str) {
         let id = m.info.lesson_id.clone();
         let stats = store.stats();
         let (ev, bytes): (u64, u64) = stats.iter().fold((0, 0), |a, s| (a.0 + s.1.events, a.1 + s.1.bytes));
-        eprintln!("[core] 收课 {id}：{ev} 条事件，{bytes} 字节；导出用 --lesson {id}");
+        eprintln!("[client] 收课 {id}：{ev} 条事件，{bytes} 字节；导出用 --lesson {id}");
         for h in sup.ids() {
             let _ = sup.send(&h, Command::StopLesson { lesson_id: id.clone(), reason: reason.to_string() });
         }
     }
     if let Err(e) = store.end_lesson(reason) {
-        eprintln!("[core] 收尾写盘失败：{e}");
+        eprintln!("[client] 收尾写盘失败：{e}");
     }
 }
 
 fn print_status(store: &Store, sup: &Supervisor) {
     let lesson = store.active_lesson().map(|m| m.info.lesson_id.clone()).unwrap_or_else(|| "—".into());
     println!(
-        "[core] {} 课={lesson} proto=v{PROTO}",
+        "[client] {} 课={lesson} proto=v{PROTO}",
         hhmmss(classagent_schema::utc_ms())
     );
     let mut total = 0u64;
@@ -443,7 +443,7 @@ fn export(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     f.write_all(text.as_bytes())?;
     f.flush()?;
     println!(
-        "[core] 导出 {}：track={} ink={} 语句={} 书写中讲话={}ms 坏行={}",
+        "[client] 导出 {}：track={} ink={} 语句={} 书写中讲话={}ms 坏行={}",
         out_path.display(),
         payload.track.len(),
         payload.stats.strokes,
@@ -452,11 +452,11 @@ fn export(opts: Opts, data: PathBuf) -> std::io::Result<()> {
         bad
     );
     for w in &payload.warnings {
-        println!("[core] 警告：{w}");
+        println!("[client] 警告：{w}");
     }
     for (s, h) in &payload.sources {
         if h.silent {
-            println!("[core] 源 {s} 声明了 {:?} 却全程无事件", h.declared);
+            println!("[client] 源 {s} 声明了 {:?} 却全程无事件", h.declared);
         }
     }
     Ok(())
@@ -484,7 +484,7 @@ fn digest_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     match opts.val("out") {
         Some(p) => {
             std::fs::write(p, text.as_bytes())?;
-            println!("[core] 摘要已写入 {p}");
+            println!("[client] 摘要已写入 {p}");
         }
         None => print!("{text}"),
     }
@@ -544,7 +544,7 @@ fn push_cmd(opts: Opts, data: PathBuf) -> std::io::Result<()> {
         proto: PROTO,
         lesson_id: id.clone(),
         uploaded_at_utc_ms: classagent_schema::utc_ms(),
-        source: format!("classagent-core {}", env!("CARGO_PKG_VERSION")),
+        source: format!("classagent-client {}", env!("CARGO_PKG_VERSION")),
         ai_payload,
     };
     let body = serde_json::to_vec(&upload).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;

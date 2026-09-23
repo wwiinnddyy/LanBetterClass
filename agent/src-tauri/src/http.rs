@@ -1,7 +1,7 @@
 //! 观察端的最小 HTTP 客户端：只用 `std::net`，走本机 `http://`。
 //!
-//! 与客户端 `core/push.rs` 同源——不引 async 运行时 / HTTP 库 / TLS 栈。生产要出公网时，
-//! TLS 交给反向代理终结；这里只面向本机/局域网的 core serve 与 classagent-server。
+//! 与客户端 `client/src/push.rs` 同源——不引 async 运行时 / HTTP 库 / TLS 栈。生产要出公网时，
+//! TLS 交给反向代理终结；这里只面向本机/局域网的 client serve 与 server。
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
