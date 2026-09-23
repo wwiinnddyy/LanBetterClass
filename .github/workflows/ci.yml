@@ -35,19 +35,18 @@ jobs:
       - name: test
         run: cargo test --workspace --message-format=short
 
-      # Linux 这一腿兼任端到端：CI 的磁盘不是约束，所以让它在真实进程模型上
-      # 把"开课 → 投递 → 缺口/重启/blob → 落盘 → 导出 AI 载荷"跑一遍并断言实数。
+      # 端到端守卫，两个平台各跑一遍同一份脚本：Windows 侧的子进程 spawn、管道、
+      # CRLF、$TARGET_DIR 补 .exe 这些行为只有真 Windows runner 能证。
       - name: smoke (core + adapters)
-        if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: bash tools/ci-smoke.sh
 
       - name: artifact
-        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: linux-bin
+          name: bins-${{ matrix.os }}
           path: |
-            target/debug/classagent-core
-            target/debug/a-fake
-            target/debug/a-audiofile
+            target/debug/classagent-core*
+            target/debug/a-fake*
+            target/debug/a-audiofile*
           if-no-files-found: warn
