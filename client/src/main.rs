@@ -151,89 +151,7 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
 
     while !quit {
         match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Inbound::Line { adapter_id, value }) => {
-                let pending = sup.find(&adapter_id).map(|h| h.status == Status::Pending).unwrap_or(false);
-                if pending {
-                    match serde_json::from_value::<Admit>(value.clone()) {
-                        Ok(a) => {
-                            store.register_adapter(&adapter_id, a.manifest.budget.clone());
-                            let _ = store.note(
-                                kinds::CORE_ADMIT,
-                                serde_json::json!({ "adapter_id": adapter_id, "manifest": a.manifest }),
-                            );
-                            match sup.handle(&adapter_id) {
-                                Some(h) => {
-                                    if let Err(e) = h.admit(&a) {
-                                        eprintln!("[client] {adapter_id} 拒绝装载：{e}");
-                                    }
-                                }
-                                None => eprintln!("[client] {adapter_id} 报了 Admit 但没有对应句柄，忽略"),
-                            }
-                            if let Some(h) = sup.find(&adapter_id) {
-                                if h.status == Status::Ready {
-                                    let produces = h.manifest.clone().map(|m| m.produces).unwrap_or_default();
-                                    let needs = h.manifest.clone().map(|m| m.needs_lesson).unwrap_or(false);
-                                    eprintln!("[client] {adapter_id} 就绪 produces={:?} needs_lesson={needs}", produces.join(","));
-                                    if !needs || store.active_lesson().is_some() {
-                                        if let Some(li) = store.active_lesson().map(|m| m.info.clone()) {
-                                            let _ = sup.send(&adapter_id, Command::StartLesson { lesson: li });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => eprintln!("[client] {adapter_id} 首行不是 Admit：{}", shorten(&e.to_string(), 200)),
-                    }
-                } else {
-                    match serde_json::from_value::<Envelope>(value.clone()) {
-                        Ok(env) => {
-                            let out = store.append(&adapter_id, &env)?;
-                            if let Some(lost) = out.gap {
-                                eprintln!("[client] {adapter_id} seq 空洞：丢 {lost} 条（status={:?}）", out.status);
-                            }
-                            if out.kill {
-                                eprintln!("[client] {adapter_id} 超出预算，已终止且不再拉起");
-                                sup.kill(&adapter_id, "超出预算");
-                            }
-                        }
-                        Err(e) => {
-                            let _ = store.append_rejected(&adapter_id, &value, &e.to_string());
-                            eprintln!("[client] {adapter_id} 一条事件解析失败，已原样保留");
-                        }
-                    }
-                }
-            }
-            Ok(Inbound::Eof { adapter_id }) => {
-                // 只报不杀：真正判活死交给 reap()，避免把"自己退出"的适配器误判成崩溃。
-                eprintln!("[client] {adapter_id} 关闭了 stdout");
-            }
-            Ok(Inbound::Err { adapter_id, msg }) => {
-                eprintln!("[client] {adapter_id} 读取错误：{}", shorten(&msg, 200));
-            }
-            Ok(Inbound::Console { line }) => {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
-                let (head, rest) = match line.find(' ') {
-                    Some(i) => (line[..i].to_string(), line[i + 1..].to_string()),
-                    None => (line.clone(), String::new()),
-                };
-                match head.as_str() {
-                    "start" => {
-                        let prev = store.active_lesson_id().map(|s| s.to_string());
-                        let v: serde_json::Value = serde_json::from_str(&rest).unwrap_or(serde_json::json!({}));
-                        let info = lesson_from_value(&v, prev.filter(|p| !p.is_empty()).map(|p| p.to_string()));
-                        start_lesson(&mut store, &mut sup, info);
-                    }
-                    "stop" => {
-                        stop_lesson(&mut store, &mut sup, "console");
-                    }
-                    "status" => print_status(&store, &sup),
-                    "quit" | "exit" => quit = true,
-                    other => eprintln!("[client] 未知指令 {other}（可用：start/stop/status/quit）"),
-                }
-            }
+            Ok(ib) => handle_inbound(ib, &mut store, &mut sup, &rx, &mut quit, false)?,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -253,7 +171,7 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
         if let Some(d) = deadline {
             if Instant::now() >= d {
                 eprintln!("[client] 到达 --max-seconds，收尾");
-                stop_lesson(&mut store, &mut sup, "max_seconds");
+                stop_lesson(&mut store, &mut sup, &rx, &mut quit, "max_seconds", false);
                 quit = true;
             }
         }
@@ -264,12 +182,163 @@ fn run(opts: Opts, data: PathBuf) -> std::io::Result<()> {
     }
 
     if store.active_lesson().is_some() {
-        stop_lesson(&mut store, &mut sup, "core-exit");
+        stop_lesson(&mut store, &mut sup, &rx, &mut quit, "core-exit", false);
     }
     sup.shutdown("core 退出");
     store.flush()?;
     eprintln!("[client] 已收尾，数据在 {}", store.root.display());
     Ok(())
+}
+
+/// 处理一条入站消息。
+///
+/// `nested` 表示此刻已经在等适配器收尾了：再收到 stop 只关门、不再等一轮，
+/// 否则 stop → 等尾巴 → 又收到 stop 会递归下去。
+fn handle_inbound(
+    ib: Inbound,
+    store: &mut Store,
+    sup: &mut Supervisor,
+    rx: &Receiver<Inbound>,
+    quit: &mut bool,
+    nested: bool,
+) -> std::io::Result<()> {
+    match ib {
+        Inbound::Line { adapter_id, value } => {
+            let pending = sup.find(&adapter_id).map(|h| h.status == Status::Pending).unwrap_or(false);
+            if pending {
+                match serde_json::from_value::<Admit>(value.clone()) {
+                    Ok(a) => {
+                        store.register_adapter(&adapter_id, a.manifest.budget.clone());
+                        let _ = store.note(
+                            kinds::CORE_ADMIT,
+                            serde_json::json!({ "adapter_id": adapter_id, "manifest": a.manifest }),
+                        );
+                        match sup.handle(&adapter_id) {
+                            Some(h) => {
+                                if let Err(e) = h.admit(&a) {
+                                    eprintln!("[client] {adapter_id} 拒绝装载：{e}");
+                                }
+                            }
+                            None => eprintln!("[client] {adapter_id} 报了 Admit 但没有对应句柄，忽略"),
+                        }
+                        if let Some(h) = sup.find(&adapter_id) {
+                            if h.status == Status::Ready {
+                                let produces = h.manifest.clone().map(|m| m.produces).unwrap_or_default();
+                                let needs = h.manifest.clone().map(|m| m.needs_lesson).unwrap_or(false);
+                                eprintln!("[client] {adapter_id} 就绪 produces={:?} needs_lesson={needs}", produces.join(","));
+                                if !needs || store.active_lesson().is_some() {
+                                    if let Some(li) = store.active_lesson().map(|m| m.info.clone()) {
+                                        let _ = sup.send(&adapter_id, Command::StartLesson { lesson: li });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("[client] {adapter_id} 首行不是 Admit：{}", shorten(&e.to_string(), 200)),
+                }
+            } else {
+                match serde_json::from_value::<Envelope>(value.clone()) {
+                    Ok(env) => {
+                        let out = store.append(&adapter_id, &env)?;
+                        if let Some(lost) = out.gap {
+                            eprintln!("[client] {adapter_id} seq 空洞：丢 {lost} 条（status={:?}）", out.status);
+                        }
+                        if out.kill {
+                            eprintln!("[client] {adapter_id} 超出预算，已终止且不再拉起");
+                            sup.kill(&adapter_id, "超出预算");
+                        }
+                    }
+                    Err(e) => {
+                        let _ = store.append_rejected(&adapter_id, &value, &e.to_string());
+                        eprintln!("[client] {adapter_id} 一条事件解析失败，已原样保留");
+                    }
+                }
+            }
+        }
+        Inbound::Eof { adapter_id } => {
+            // 只报不杀：真正判活死交给 reap()，避免把"自己退出"的适配器误判成崩溃。
+            eprintln!("[client] {adapter_id} 关闭了 stdout");
+        }
+        Inbound::Err { adapter_id, msg } => {
+            eprintln!("[client] {adapter_id} 读取错误：{}", shorten(&msg, 200));
+        }
+        Inbound::Console { line } => {
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                return Ok(());
+            }
+            let (head, rest) = match line.find(' ') {
+                Some(i) => (line[..i].to_string(), line[i + 1..].to_string()),
+                None => (line.clone(), String::new()),
+            };
+            match head.as_str() {
+                "start" => {
+                    let prev = store.active_lesson_id().map(|s| s.to_string());
+                    let v: serde_json::Value = serde_json::from_str(&rest).unwrap_or(serde_json::json!({}));
+                    let info = lesson_from_value(&v, prev.filter(|p| !p.is_empty()).map(|p| p.to_string()));
+                    start_lesson(store, sup, info);
+                }
+                "stop" => stop_lesson(store, sup, rx, quit, "console", nested),
+                "status" => print_status(store, sup),
+                "quit" | "exit" => *quit = true,
+                other => eprintln!("[client] 未知指令 {other}（可用：start/stop/status/quit）"),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 收课。顺序是有意安排的：先通知适配器，再把它们收尾时补发的那几条读进来，最后才关课。
+///
+/// 反过来做就会丢数据：课一关，落盘目标从 lessons/<id>/events.ndjson 切到 misc.ndjson，
+/// 适配器那句"这节课到底采到了什么"的 session.close 就记到课外面去了。
+fn stop_lesson(
+    store: &mut Store,
+    sup: &mut Supervisor,
+    rx: &Receiver<Inbound>,
+    quit: &mut bool,
+    reason: &str,
+    nested: bool,
+) {
+    let id = match store.active_lesson() {
+        Some(m) => m.info.lesson_id.clone(),
+        None => return,
+    };
+    for h in sup.ids() {
+        let _ = sup.send(&h, Command::StopLesson { lesson_id: id.clone(), reason: reason.to_string() });
+    }
+    if !nested {
+        drain_tail(store, sup, rx, quit);
+    }
+    let stats = store.stats();
+    let (ev, bytes): (u64, u64) = stats.iter().fold((0, 0), |a, s| (a.0 + s.1.events, a.1 + s.1.bytes));
+    eprintln!("[client] 收课 {id}：{ev} 条事件，{bytes} 字节；导出用 --lesson {id}");
+    if let Err(e) = store.end_lesson(reason) {
+        eprintln!("[client] 收尾写盘失败：{e}");
+    }
+}
+
+/// 等适配器把收尾的尾巴送进来：攒在 VAD 里的最后一句，以及那条汇总用的 session.close。
+///
+/// 判据是"静默"而不是"进程退出"：适配器是发完才退的，等它就等于把一次正常的关机变成空转。
+/// 400ms 静默足够跨一次磁盘写；3 秒是硬顶——再慢也不该让教师等关机等到怀疑人生。
+fn drain_tail(store: &mut Store, sup: &mut Supervisor, rx: &Receiver<Inbound>, quit: &mut bool) {
+    let hard = Instant::now() + Duration::from_millis(3_000);
+    loop {
+        let left = hard.saturating_duration_since(Instant::now()).min(Duration::from_millis(400));
+        if left.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(left) {
+            Ok(ib) => {
+                if let Err(e) = handle_inbound(ib, store, sup, rx, quit, true) {
+                    eprintln!("[client] 收尾时落盘失败：{e}");
+                }
+            }
+            // 一个静默窗口没东西 = 尾巴到齐；断开 = 再也没人会发了。
+            Err(_) => break,
+        }
+    }
 }
 
 fn start_lesson(store: &mut Store, sup: &mut Supervisor, info: LessonInfo) {
@@ -289,21 +358,6 @@ fn start_lesson(store: &mut Store, sup: &mut Supervisor, info: LessonInfo) {
             eprintln!("[client] StartLesson 已送达 {sent} 个适配器");
         }
         Err(e) => eprintln!("[client] 开课失败：{e}"),
-    }
-}
-
-fn stop_lesson(store: &mut Store, sup: &mut Supervisor, reason: &str) {
-    if let Some(m) = store.active_lesson() {
-        let id = m.info.lesson_id.clone();
-        let stats = store.stats();
-        let (ev, bytes): (u64, u64) = stats.iter().fold((0, 0), |a, s| (a.0 + s.1.events, a.1 + s.1.bytes));
-        eprintln!("[client] 收课 {id}：{ev} 条事件，{bytes} 字节；导出用 --lesson {id}");
-        for h in sup.ids() {
-            let _ = sup.send(&h, Command::StopLesson { lesson_id: id.clone(), reason: reason.to_string() });
-        }
-    }
-    if let Err(e) = store.end_lesson(reason) {
-        eprintln!("[client] 收尾写盘失败：{e}");
     }
 }
 

@@ -29,7 +29,8 @@ ADAPTER="$BIN/a-audio$EXE"
 [ -f "$ADAPTER" ] || { echo "FAIL 找不到 $ADAPTER"; exit 1; }
 
 rm -rf "$WORK"
-mkdir -p "$WORK/adp" "$WORK/adp-quiet" "$WORK/adp-nodev" "$WORK/data" "$WORK/data-quiet" "$WORK/data-nodev"
+mkdir -p "$WORK/adp" "$WORK/adp-quiet" "$WORK/adp-nodev" "$WORK/adp-cutoff" \
+         "$WORK/data" "$WORK/data-quiet" "$WORK/data-nodev" "$WORK/data-cutoff"
 
 # ---- 造一节课的录音：讲话—停顿—讲话—关门声—安静 ----
 # 结构（秒）：1.0 静音 / 2.0 讲话 / 1.5 停顿 / 1.2 讲话 / 0.5 静音 / 0.06 关门声 / 2.0 静音
@@ -76,6 +77,14 @@ nodev = json.loads(json.dumps(src))
 nodev['params'].pop('fixture', None)
 nodev['params'].update({'source': 'device'})
 json.dump(nodev, open(f'{work}/adp-nodev/a-audio.adapter.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+
+# 课到一半被叫停（提前下课 / 断电前最后一手）：不限速，5 秒 wall = 5 秒课堂时间轴，
+# 正好切在第二段讲话（4.5s~5.7s）中间——这一段的 blob 与 session.close 只可能在
+# StopLesson 之后才发出来，所以它是对"收尾时序"最直接的守卫：客户端一旦提前停止
+# 读管道，这两条就永远落不了盘（真麦克风上踩过）。
+cut = json.loads(json.dumps(src))
+cut['params'].update({'source': 'fixture', 'fixture': f'{work}/lesson.wav', 'speed': 1, 'emit_silence': False})
+json.dump(cut, open(f'{work}/adp-cutoff/a-audio.adapter.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 PY
 
 echo "--- ① 正常门限：应切出话轮 ---"
@@ -94,6 +103,11 @@ echo "--- ③ 真去开设备（runner 无声卡）：应一条事件都不发 -
 "$CLIENT" run --data "$WORK/data-nodev" --adapters "$WORK/adp-nodev" --lesson examples/lesson.demo.json --max-seconds 6 \
   < /dev/null > "$WORK/run3.log" 2>&1 || true
 "$CLIENT" export --data "$WORK/data-nodev" --lesson "$LESSON" > "$WORK/export3.log" 2>&1 || true
+
+echo "--- ④ 课到一半下课：尾段与 session.close 是 StopLesson 之后才发的 ---"
+"$CLIENT" run --data "$WORK/data-cutoff" --adapters "$WORK/adp-cutoff" --lesson examples/lesson.demo.json --max-seconds 5 \
+  < /dev/null > "$WORK/run4.log" 2>&1 || true
+"$CLIENT" export --data "$WORK/data-cutoff" --lesson "$LESSON" > "$WORK/export4.log" 2>&1 || true
 
 python3 - "$WORK" <<'PY'
 import json, os, sys, wave
@@ -216,5 +230,27 @@ need(p3['stats']['audio_chunks'] == 0, '无设备时导出的音频统计必须�
 log3 = open(os.path.join(work, 'run3.log'), encoding='utf-8').read()
 need('无法开始采集' in log3, '适配器的失败原因要能在日志里看到，而不是只表现为“缺一个源”')
 
-print('AUDIO OK  2 个话轮 / %d 字节 / 丢弃 1 记短促噪音 / 无设备时不产出也不伪装' % total)
+# ---------- ④ 中途下课：收尾的那两条必须还在同一节课里 ----------
+ev4 = read_events(os.path.join(work, 'data-cutoff'))
+mine4 = [e for e in ev4 if e['adapter_id'] == 'a-audio']
+kinds4 = [e['envelope']['kind'] for e in mine4]
+need(kinds4[-1] == 'session.close',
+     f'课是被中途叫停的，那这条 session.close 只能在 StopLesson 之后才发出——客户端提前停读管道它就会消失：{kinds4}')
+ck4 = chunks_of(ev4)
+need(ck4, '切到一半的讲话也该被 flush 落盘，而不是跟着进程一起没了')
+c4 = [e for e in mine4 if e['envelope']['kind'] == 'session.close'][0]['envelope']['payload']
+need(c4['chunks'] == len(ck4), f'收课统计要等于真正落盘的事件数：{c4["chunks"]} vs {len(ck4)}')
+need(c4['error'] is None, f'中途下课不是错误：{c4["error"]}')
+last = ck4[-1]['envelope']['payload']
+need(os.path.exists(os.path.join(work, 'data-cutoff', 'lessons', 'L-demo-0001', 'blobs', last['blob'])),
+     '最后一段（被下课切断的那句）的 blob 必须在')
+need(last['t0_ms'] <= 5000, f'尾段应落在被切断的时刻附近：t0={last["t0_ms"]}')
+bad4 = [e for e in mine4 if e['status'] != 'accepted']
+need(not bad4, f'收尾事件也必须全部被接受：{[(b["status"], b.get("raw")) for b in bad4]}')
+# 关课前收进来的尾巴不能流落到 misc.ndjson：那是“记在课外面”的另一种说法。
+misc4 = os.path.join(work, 'data-cutoff', 'misc.ndjson')
+need(not os.path.exists(misc4) or 'audio' not in open(misc4, encoding='utf-8').read(),
+     '收尾事件不能写进 misc.ndjson')
+
+print('AUDIO OK  2 个话轮 / %d 字节 / 丢弃 1 记短促噪音 / 中途下课不丢收尾 / 无设备时不产出也不伪装' % total)
 PY

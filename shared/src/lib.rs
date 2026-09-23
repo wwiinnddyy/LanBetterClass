@@ -161,6 +161,9 @@ pub enum Command {
     /// 进程一起来就发。`data_dir` 是采集根的绝对路径。
     Configure { data_dir: String, params: serde_json::Value },
     StartLesson { lesson: LessonInfo },
+    /// 课结束了。收尾算在这条上：适配器要把攒着的尾段（未闭合的话轮、还没落的 blob）
+    /// 连同 `session.close` 发完——核心会等一段静默再接关课，所以“最后一句”来得及落盘。
+    /// 不要把收尾推到 `Stop` 上：那时课已经关了，事件只能掉进 misc.ndjson，等于记在课外面。
     StopLesson { lesson_id: String, reason: String },
     /// 要求适配器在 2 秒内自己退出；超时由核心 kill。
     Stop { reason: String },
