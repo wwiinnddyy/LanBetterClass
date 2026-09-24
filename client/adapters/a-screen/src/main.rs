@@ -364,7 +364,11 @@ struct Session {
 impl Session {
     fn start(out: &Out, seq: &AtomicU64, params: Value, l: LessonInfo, stop: &Arc<AtomicBool>) -> Session {
         let cfg = Cfg::from_params(&params);
-        // 上一节课的「下课」不许漏进这一节：新会话从这里重新开始等命令。
+        // 开课先清一次陈年的下课信号。不洗的话，上一节那种"没人在读"的信号（回放跑完了、
+        // blob 写崩了，会话早就被取走）会把这一节当场下课，一整节课只剩开场一帧。
+        // 代价是另一种极端情形：下课命令比这个会话还早几毫秒到，会被一并洗掉——那一条
+        // 只能晚到 Stop 才发（仍然发得出去）。要两头都保住得拿 lesson_id 做信号身份，
+        // 而客户端的 start / stop 本来就是相隔几秒的一对命令，不值得为这个窗口复杂化协议。
         stop.store(false, Ordering::SeqCst);
         let fixture_dir = params
             .get("fixture_dir")
