@@ -874,8 +874,9 @@ mod tests {
         assert_eq!((c.closes, c.chunks, c.voiced_ms, c.stream_errors), (2, 5, 4500, 3));
         assert_eq!(p.stats.stream_errors, 3);
         assert!(
-            p.warnings.iter().any(|w| w.contains("掉过 3 次")),
-            "掉过帧必须写进「不能下什么结论」：{:?}",
+            // 钉新措辞，而且钉上源名：“报过 N 次”属于哪个源，才是这条警告有用的前提。
+            p.warnings.iter().any(|w| w.contains("a-audio") && w.contains("报过 3 次采集流错误")),
+            "掉过帧必须写进「不能下什么结论」，且要说是哪个源：{:?}",
             p.warnings
         );
     }
