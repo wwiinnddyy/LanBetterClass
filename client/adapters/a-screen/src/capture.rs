@@ -455,7 +455,8 @@ mod tests {
     fn an_unknown_capture_is_refused_not_silently_switched() {
         // 非 Windows 上 open() 恒拒（连清单都不查），所以这条只在 Windows 侧断行为，
         // 另一侧断"这台机器上这个源确实起不来"。
-        let e = open("x11", 0).unwrap_err();
+        // 不用 unwrap_err：它要求 Ok 那一侧（Opened）也实现 Debug，而 Box<dyn Backend> 不满足。
+        let e = open("x11", 0).err().expect("清单外的后端必须被当场拒，不能悄悄换一条路");
         #[cfg(windows)]
         assert!(e.contains("capture"), "{e}");
         #[cfg(not(windows))]

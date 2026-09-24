@@ -54,33 +54,39 @@ fn io_err(e: png::EncodingError) -> std::io::Error {
 /// 不会去猜为什么。
 pub fn read(path: &Path) -> Result<Pixmap, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("打不开：{e}"))?;
-    let decoder = Decoder::new(BufReader::new(file));
-    let (info, mut reader) = decoder.read_info().map_err(|e| format!("不是合法 PNG：{e}"))?;
-    if info.width == 0 || info.height == 0 {
+    // png 0.18 把“读头”与“交解码器”合成了一步：read_info() 只返 Reader，信息挂在它身上。
+    // 所以先把要用的几个标量抄进局部：next_row() 需要 &mut reader，而 info 还借用着它。
+    let mut reader = Decoder::new(BufReader::new(file))
+        .read_info()
+        .map_err(|e| format!("不是合法 PNG：{e}"))?;
+    let (w, h, bit_depth, interlaced, color_type) = {
+        let i = reader.info();
+        (i.width as usize, i.height as usize, i.bit_depth, i.interlaced, i.color_type)
+    };
+    let palette = reader.info().palette.clone().map(|c| c.into_owned());
+    if w == 0 || h == 0 {
         return Err("PNG 声明的尺寸是 0".into());
     }
-    if info.interlaced {
+    if interlaced {
         // 逐行接口读不了隔行图（每行的行宽随 Adam7 的 pass 变）。截图工具不会产出
         // 隔行 PNG，遇到就直说，别用"尽力了"糊过去。
         return Err("不支持隔行（Adam7）PNG：请让导出方存非隔行".into());
     }
-    if info.bit_depth != BitDepth::Eight {
-        return Err(format!("只支持 8 bit/通道，这张是 {:?}", info.bit_depth));
+    if bit_depth != BitDepth::Eight {
+        return Err(format!("只支持 8 bit/通道，这张是 {bit_depth:?}"));
     }
-    let (w, h) = (info.width as usize, info.height as usize);
-    let palette = info.palette.clone().map(|c| c.into_owned());
     let mut rgb = Vec::with_capacity(w * h * 3);
-    let mut rows: u32 = 0;
+    let mut rows: usize = 0;
     while let Some(row) = reader.next_row().map_err(|e| format!("解码失败：{e}"))? {
         let data = row.data();
         if data.len() % w != 0 {
             return Err(format!("行长度 {} 不能被宽度 {w} 整除", data.len()));
         }
         let bpp = data.len() / w;
-        expand_row(&mut rgb, data, bpp, info.color_type, palette.as_deref())?;
+        expand_row(&mut rgb, data, bpp, color_type, palette.as_deref())?;
         rows += 1;
     }
-    if rows as usize != h {
+    if rows != h {
         return Err(format!("只解出 {rows} 行，声明有 {h} 行"));
     }
     if rgb.len() != w * h * 3 {

@@ -237,9 +237,9 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
 
     // ---- 五、这一节不能下什么结论 ----
     out.push_str("五、按本轮采集，以下结论不能下\n");
-    let mut gaps = Vec::new();
+    let mut gaps: Vec<String> = Vec::new();
     if st.audio_chunks == 0 {
-        gaps.push("没有录音：任何师生言语互动、提问层次、讲授占比都不成立");
+        gaps.push("没有录音：任何师生言语互动、提问层次、讲授占比都不成立".into());
     }
     if st.stream_errors > 0 {
         // 逐源指名道姓：把抓屏的后端重建说成"录音掉帧"，人会去查错的设备。
@@ -254,23 +254,20 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
             }
         }
     }
-    if st.keyframes == 0 {
-        gaps.push("没有屏幕关键帧：课件与共享屏幕上出现过什么无法还原（只能靠笔迹与转写）");
-    }
     if st.utterances == 0 {
-        gaps.push("没有转写：有录音但还没出文字，话语类结论要等云端转写回灌");
+        gaps.push("没有转写：有录音但还没出文字，话语类结论要等云端转写回灌".into());
     }
     if st.strokes == 0 {
-        gaps.push("没有笔迹：板书结构、书写流畅性、板面留存都无依据");
+        gaps.push("没有笔迹：板书结构、书写流畅性、板面留存都无依据".into());
     }
     if st.keyframes == 0 {
-        gaps.push("没有屏幕证据：希沃课件那一页讲了什么无法回溯，只能靠课件原文件");
+        gaps.push("没有屏幕证据：希沃课件那一页讲了什么无法回溯，只能靠课件原文件".into());
     }
     if st.eval_records == 0 {
-        gaps.push("没有评估数据：达成度、错因、分层建议一律不做");
+        gaps.push("没有评估数据：达成度、错因、分层建议一律不做".into());
     }
     if p.lesson.courseware.is_empty() {
-        gaps.push("没有课件文件：讲到的内容只能靠板面与转写推断，无法对齐教学进度");
+        gaps.push("没有课件文件：讲到的内容只能靠板面与转写推断，无法对齐教学进度".into());
     }
     if gaps.is_empty() {
         out.push_str("  （无：本轮五类数据齐备）\n");

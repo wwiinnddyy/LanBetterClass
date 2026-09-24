@@ -443,6 +443,8 @@ impl Session {
             // 读坏一张跳过去：一张解不开的图不该换掉一整节课的关键帧。
             Next::Bad => self.skipped += 1,
             Next::Quiet => {}
+            // 回放跑完了：是否还在已经由上面的 ended 记下，这里只需补齐分支。
+            Next::Ended => {}
         }
         !ended
     }

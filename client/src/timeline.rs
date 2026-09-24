@@ -938,7 +938,10 @@ mod tests {
         assert_eq!(s["screen"]["min_dist"], 6);
         assert!(s.get("source").is_none(), "自述里不该再留一份 source");
         let x = h.close_extra.clone().expect("CloseStats 认不下的收课字段要原样留着");
-        assert_eq!((x["polls"], x["unchanged"], x["throttled"]), (45, 40, 3));
+        assert_eq!(
+            (x["polls"], x["unchanged"], x["throttled"]),
+            (serde_json::json!(45), serde_json::json!(40), serde_json::json!(3))
+        );
         assert_eq!(p.stats.keyframes, 1);
         assert_eq!(p.stats.keyframe_bytes, 4096);
         let d = p.track.iter().find(|t| t.kind == kinds::SCREEN_KEYFRAME).unwrap().detail.clone().unwrap();
@@ -946,6 +949,18 @@ mod tests {
         // 抓屏后端的重建不许被说成"录音掉帧"。
         assert!(p.warnings.iter().any(|w| w.contains("采集流错误") && w.contains("a-screen")), "{:?}", p.warnings);
         assert!(!p.warnings.iter().any(|w| w.contains("录音")), "抓屏的错不该安到录音头上：{:?}", p.warnings);
+    }
+
+    #[test]
+    fn an_unmeasured_field_stays_null_instead_of_becoming_zero() {
+        // 开场那一帧没有上一帧可比，适配器报的是 null。导出必须原样带出去：
+        // 换成 0 会被读成“完全没变”，整个抹掉会被读成“这个源没报这个字段”。
+        let v = serde_json::json!({ "trigger": "open", "dist": null, "mad": null });
+        let d = pick(&v, &["trigger", "dist", "mad"]).unwrap();
+        let m = d.as_object().unwrap();
+        assert!(m.contains_key("dist") && m["dist"].is_null(), "null 不能被动丢掉：{d}");
+        assert!(m.contains_key("mad") && m["mad"].is_null(), "{d}");
+        assert_eq!(d["trigger"], "open");
     }
 
     #[test]
