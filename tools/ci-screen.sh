@@ -324,10 +324,27 @@ def refs_of(evs):
     return [k['envelope']['payload'].get('blob') for k in kinds_of(evs, 'screen.keyframe')]
 
 
-def exported(name):
-    # `run` 不写 ai_payload.json，导出是 CLI 单独一步；上面那层把每场的导出存成 *.export。
-    p = os.path.join(work, name)
+def exported(data):
+    # `export` 把载荷写到 <data>/lessons/<id>/ai_payload.json，stdout 只是一句给人看的话
+    # （上面那层还 2>&1 混进了 stderr）——读那个文件才是读事实。
+    p = os.path.join(data, 'lessons', 'L-demo-0001', 'ai_payload.json')
     return json.load(open(p, encoding='utf-8')) if os.path.exists(p) else None
+
+
+# 守卫自己崩掉时，丢掉的往往不只是那一句 traceback，而是「前面几场已经发现的问题」——
+# 一处 KeyError 会吞掉整份报告，于是修完一个错才撞上下一个（CI 上每次往返是几分钟）。
+# 未捕获异常本来就会让这一步非 0 退出，这里只负责把已累计的失败一并打出来。
+def _hook(etype, value, tb):
+    import traceback
+
+    traceback.print_exception(etype, value, tb)
+    if fails:
+        print('FAIL 崩溃前已累计的失败')
+        for f in fails:
+            print('  -', f)
+
+
+sys.excepthook = _hook
 
 
 # ---------- ① 翻页 ----------
@@ -358,8 +375,8 @@ need(kf1[0]['envelope']['payload'].get('dist') is None,
 need(kf1[0]['envelope']['payload'].get('mad') is None, '① 开场帧的均差同样是凭空补的')
 need(all(k['envelope']['payload'].get('dist') is not None for k in kf1[1:]),
      '① 变化帧必须带上与上一落盘帧比出来的差值，否则调门限没有依据')
-p1 = exported('run1.export')
-need(p1 is not None, '① 导出没跑出来')
+p1 = exported(d1)
+need(p1 is not None, '① 导出没写出 ai_payload.json（看 run1.export 里的报错）')
 if p1:
     need(p1['stats']['keyframes'] == 6, f"① 导出的帧数不对：{p1['stats']['keyframes']}")
     need(p1['stats']['keyframe_bytes'] == c1['bytes'], '① 导出的关键帧字节总和应与收课自述一致')
@@ -393,14 +410,14 @@ need(all(r in blobs(d3) for r in refs_of(ev3)), f'③ 设备路径报了不存�
 need(not any('panic' in l.lower() for l in open(os.path.join(work, 'run3.log'), encoding='utf-8', errors='ignore')),
      '③ 设备路径 panic 了：没有桌面必须走"该源缺席"，不是把进程弄崩')
 if not ev3:
-    p3 = exported('run3.export')
+    p3 = exported(d3)
     need(p3 is None or 'a-screen' not in p3['sources'], '③ 全程零事件的源不该带着"已工作"的计数进健康表')
     print('③ 本机没有可采的桌面：该源按设计从健康表缺席')
 else:
     need(c3 is not None, '③ 既然产出了事件，收课记录也必须在')
     need(c3 and c3['chunks'] == len(kf3), f'③ 帧数与自述不一致：{c3}')
     # 只有真设备分支才有 backend 可报；这一条在跑得动桌面的 runner 上才是有效守卫。
-    p3 = exported('run3.export')
+    p3 = exported(d3)
     if p3 and 'a-screen' in p3['sources']:
         b = p3['sources']['a-screen']['screen'].get('backend')
         need(b in ('gdi', 'dxgi'), f"③ 设备路径必须自述用了哪条后端：{p3['sources']['a-screen']['screen']}")
@@ -413,8 +430,14 @@ kf4 = kinds_of(ev4, 'screen.keyframe')
 need(len(kf4) >= 2, f'④ 5 秒里 600ms 一页，至少该有几帧，实得 {len(kf4)}')
 c4 = close_of(ev4)
 need(c4 is not None, '④ 收课记录不见了：收尾时序又回到"客户端提前停止读管道"那个老 bug')
+# 这套 fixture 每 600ms 换一页且相邻两页必不同，所以下课那一问一定会补出一帧：
+# 尾帧必须能被认成「下课补采」。polls 与帧数相等（每问必得一帧），拿 polls 做证据
+# 会变成一条永远失败的断言，这里要钉的是「下课那一刻的画面还在这一节课里」。
 need(kf4[-1]['envelope']['payload']['trigger'] == 'close',
      f"④ 下课那一刻补采的帧要能被认出来，实得 {kf4[-1]['envelope']['payload']['trigger']}")
+_close_tail = [i for i, k in enumerate(kf4) if k['envelope']['payload']['trigger'] == 'close']
+need(_close_tail == [len(kf4) - 1],
+     f'④ 「下课」只能是最后一帧的来历，中间出现说明收尾时序被当成了课堂事实：{_close_tail} / 共 {len(kf4)} 帧')
 misc = os.path.join(d4, 'misc.ndjson')
 if os.path.exists(misc):
     m = [json.loads(l) for l in open(misc, encoding='utf-8') if l.strip()]
@@ -453,11 +476,13 @@ d6 = os.path.join(work, 'data-reload')
 ev6 = events(d6)
 kf6 = kinds_of(ev6, 'screen.keyframe')
 need(len(kf6) == 1, f'⑥ 门限调到不可能越过之后，只该剩开场那一帧，实得 {len(kf6)}')
-p6 = exported('run6.export')
-v6 = p6['sources']['a-screen']['screen']
-need(v6['screen']['min_dist'] == 64,
-     f'⑥ 磁盘写了 64，适配器自述的却是 {v6["screen"]["min_dist"]}：整条链没接上')
-need(v6['input'] == 'fixture', f'⑥ 自述没说清这一节是回放：{v6}')
+p6 = exported(d6)
+need(p6 is not None, '⑥ 导出没写出 ai_payload.json（看 run6.export 里的报错）')
+if p6:
+    v6 = p6['sources']['a-screen']['screen']
+    need(v6['screen']['min_dist'] == 64,
+         f'⑥ 磁盘写了 64，适配器自述的却是 {v6["screen"]["min_dist"]}：整条链没接上')
+    need(v6['input'] == 'fixture', f'⑥ 自述没说清这一节是回放：{v6}')
 
 # ---------- ⑦ 回看链路 ----------
 ct = open(os.path.join(work, 'blob.ctype'), encoding='utf-8').read().strip()
