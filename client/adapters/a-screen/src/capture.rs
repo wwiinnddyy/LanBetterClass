@@ -176,7 +176,9 @@ mod gdi {
                 let mem = CreateCompatibleDC(Some(screen));
                 let bmp = CreateCompatibleBitmap(screen, w, h);
                 let mut px = vec![0u8; pw * ph * 4];
-                let mut bmi = BITMAPINFO::default();
+                // BITMAPINFO 只 derive 了 Clone/Copy/Debug/PartialEq，没有 Default，
+                // 所以整块清零再填头。它本就是 POD，zeroed 就是它的默认值。
+                let mut bmi: BITMAPINFO = unsafe { std::mem::zeroed() };
                 bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
                 bmi.bmiHeader.biWidth = w;
                 // 负高度 = 自上而下的 DIB，省掉一次整帧翻行。
@@ -262,9 +264,13 @@ mod dxgi {
         ID3D11DeviceContext, ID3D11Texture2D,
     };
     use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_FORMAT_B8G8R8A8_UNORM,
-        DXGI_OUTDUPL_FRAME_INFO, DXGI_SAMPLE_DESC, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
-        IDXGIResource,
+        CreateDXGIFactory1, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+        IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource,
+    };
+    // 像素格式与采样描述在 Dxgi::Common 下，不在 Dxgi 本身；DXGI_OUTDUPL_DESC 也只给
+    // 一个 ModeDesc，尺寸要从里面拿。
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
     };
 
     pub struct Dxgi {
@@ -319,8 +325,9 @@ mod dxgi {
                 .DuplicateOutput(&device)
                 .map_err(|e| format!("DuplicateOutput：{e}（RDP / 虚机 / 基础显示驱动下通常拿不到）"))?;
             let d = dup.GetDesc();
-            let staging = make_staging(&device, d.Width, d.Height)?;
-            Ok((Bound { dup, staging, w: d.Width, h: d.Height }, ctx))
+            let (mw, mh) = (d.ModeDesc.Width, d.ModeDesc.Height);
+            let staging = make_staging(&device, mw, mh)?;
+            Ok((Bound { dup, staging, w: mw, h: mh }, ctx))
         }
     }
 
@@ -466,6 +473,9 @@ mod tests {
     #[test]
     fn bgra_is_unrolled_to_rgb() {
         assert_eq!(bgra_to_rgb(&[10, 20, 30, 255, 40, 50, 60, 0]), vec![30, 20, 10, 60, 50, 40]);
-        assert!(bgra_to_rgb(&[0, 0, 0, 0, 0, 0]).is_empty(), "不足一像素的尾巴被丢掉，不 panic");
+        // 六字节 = 一个整像素 + 两个尾巴：整像素照旧产出，尾巴被丢掉而不 panic。
+        // is_empty() 等于要求“不足 4 字节就全丢”，但实现不是这么写的。
+        assert_eq!(bgra_to_rgb(&[0, 0, 0, 0, 0, 0]), vec![0, 0, 0], "不足一像素的尾巴被丢掉，不 panic");
+        assert!(bgra_to_rgb(&[0, 0, 0]).is_empty(), "不足一像素就什么都没有");
     }
 }
