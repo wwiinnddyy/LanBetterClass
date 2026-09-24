@@ -1,0 +1,23 @@
+[package]
+name = "a-screen"
+description = "屏幕关键帧适配器：GDI / DXGI 抓屏 → dHash 变化检测 → PNG blob，产出 screen.keyframe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "a-screen"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+classagent-schema.workspace = true
+# 纯 Rust 编解码：写出的 blob 要能被观察端 <img src> 直接显示，
+# 读进来的第三方 PNG（课件导出的图、fixture 回放）也要能解。
+png.workspace = true
+
+# 抓屏绑定只在 Windows 侧进编译树：Linux 上这个源会明确报“本机不支持设备采集”
+# 并从健康表缺席（与 a-audio 遇不到麦克风时同一套可观察结果），
+# 而不是拖进一条编译不过的依赖。X11 / PipeWire 那一路是另一次改动。
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

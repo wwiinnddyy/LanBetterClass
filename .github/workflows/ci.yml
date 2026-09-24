@@ -59,6 +59,11 @@ jobs:
         shell: bash
         run: bash tools/ci-audio.sh
 
+      # 关键帧适配器：用 Python 手搓的 PNG 回放断变化检测/节流/真 blob，再断"静止的一节课只有一帧"。
+      - name: screen (a-screen)
+        shell: bash
+        run: bash tools/ci-screen.sh
+
       - name: strip linker junk
         shell: bash
         run: rm -f target/debug/*.d
@@ -73,4 +78,5 @@ jobs:
             target/debug/a-fake*
             target/debug/a-audiofile*
             target/debug/a-audio*
+            target/debug/a-screen*
           if-no-files-found: warn

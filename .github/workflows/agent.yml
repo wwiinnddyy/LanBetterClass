@@ -12,12 +12,18 @@ on:
       # 这些变了必须重跑构建校验 —— 否则 UI 会对着一个已经变形的接口静默失效，
       # 而 ci.yml 里的接口测试不会发现，因为它不编译 agent。
       - "client/src/serve.rs"
+      # timeline 决定导出里有没有 sources[id].screen / close_extra；适配器的 main.rs
+      # 决定调参表单上那些键名适配器认不认。两者都是 UI 的隐式契约。
+      - "client/src/timeline.rs"
+      - "client/adapters/**"
       - "shared/**"
   pull_request:
     paths:
       - "agent/**"
       - ".github/workflows/agent.yml"
       - "client/src/serve.rs"
+      - "client/src/timeline.rs"
+      - "client/adapters/**"
       - "shared/**"
   workflow_dispatch:
 
@@ -72,25 +78,49 @@ jobs:
           html = open('agent/ui/index.html', encoding='utf-8').read()
           rust = open('client/adapters/a-audio/src/vad.rs', encoding='utf-8').read() \
                + open('client/adapters/a-audio/src/main.rs', encoding='utf-8').read()
+          scr = open('client/adapters/a-screen/src/main.rs', encoding='utf-8').read()
+          caps = open('client/adapters/a-screen/src/capture.rs', encoding='utf-8').read()
           fails = []
           def need(c, m):
               if not c:
                   fails.append(m)
 
-          # 1) 回听必须走 webview 原生媒体元素。http_get 只回文本（from_utf8_lossy），
-          #    WAV 字节经过它一次就不是原来那份了——这条是回听能不能出声的分水岭。
+          # 1) 二进制一律走 webview 原生媒体元素。http_get 只回文本（from_utf8_lossy），
+          #    WAV 与 PNG 字节经过它一次就不是原来那份了——这条是回听与看图共同的分水岭。
           need('<audio id="player"' in html, 'index.html 里没有 <audio id="player"> 元素，回听链路断了')
-          need('/blob/' in app, 'app.js 不再直连 blob 读路径：观察端听不到声音')
+          need('<img id="frameView"' in html, 'index.html 里没有 <img id="frameView"> 元素，关键帧看原图的链路断了')
+          need('/blob/' in app, 'app.js 不再直连 blob 读路径：观察端听不到也看不到')
           for i, line in enumerate(app.splitlines(), 1):
               need(not ('/blob/' in line and ('http_get' in line or 'await get(' in line or 'post(' in line)),
                    f'app.js:{i} 把 blob 交给了文本型命令，二进制会被毁：{line.strip()}')
 
-          # 2) UI 里出现的参数名必须是适配器真认识的键。名字错了不报错，只是静默无效。
+          # 2a) 录音调参：UI 里出现的参数名必须是适配器真认识的键。名字错了不报错，只是静默无效。
           names = set(re.findall(
               r'"(rms_open|rms_close|hangover_ms|preroll_ms|min_speech_ms|max_segment_ms|frame_ms|sample_rate|emit_silence)"', app))
-          need(len(names) == 9, f'调参表单该覆盖 9 个参数，实得 {sorted(names)}')
+          need(len(names) == 9, f'录音调参表单该覆盖 9 个参数，实得 {sorted(names)}')
           known = set(re.findall(r'get\("([a-z_]+)"\)', rust))
           need(names <= known, f'UI 里这些参数名后端不认：{sorted(names - known)}（后端={sorted(known)}）')
+
+          # 2b) 抓屏调参：唯一出处是 Cfg::from_params 的函数体——它是"适配器读哪些键"的定义。
+          #     不拿全文件扫：别处一句注释里的字符串就能让一个错字溜过去。
+          snames = set(re.findall(
+              r'"(poll_ms|min_interval_ms|min_dist|min_mad|max_width|max_frames_per_lesson|max_bytes_per_lesson|emit_dirty|capture|monitor)"',
+              app))
+          need(len(snames) == 10, f'抓屏调参表单该覆盖 10 个参数，实得 {sorted(snames)}')
+          m = re.search(r'fn from_params\(.*?\n    \}', scr, re.S)
+          need(m, 'a-screen 的 Cfg::from_params 找不到了：这条守卫失去唯一出处')
+          if m:
+              sknown = set(re.findall(r'(?:get|num)\("([a-z_]+)"', m.group(0)))
+              need(snames <= sknown, f'UI 里这些抓屏参数适配器不认：{sorted(snames - sknown)}（适配器={sorted(sknown)}）')
+
+          # 2c) capture 下拉框的三个取值就是 capture.rs 的 BACKENDS；对不上 = 能写进去但起不来
+          bm = re.search(r'pub const BACKENDS: \[[^\]]*\]\s*=\s*\[([^\]]*)\]', caps)
+          need(bm, 'capture.rs 里的 BACKENDS 清单没找到——它是这条链的唯一出处')
+          if bm:
+              be = sorted(re.findall(r'"([a-z]+)"', bm.group(1)))
+              need(be == ['auto', 'dxgi', 'gdi'], f'BACKENDS 应当是 auto/dxgi/gdi，实得 {be}')
+              need(re.search(r'\[\s*"auto",\s*"gdi",\s*"dxgi"\s*\]', app),
+                   'app.js 的下拉框选项与 BACKENDS 不再一致：改适配器清单要同时改界面')
 
           # 3) 引用的每个 #id 都得存在（typo 型静默失败：拿到 null 才发现）
           ids = set()
@@ -114,7 +144,7 @@ jobs:
               for f in fails:
                   print('  -', f)
               sys.exit(1)
-          print('UI GUARD OK  回听直连 blob / 9 个参数名对齐 / id 与标签页都在')
+          print('UI GUARD OK  两条二进制直连 blob / 9 + 10 个参数名对齐 / 后端清单 / id 与标签页都在')
           PY
 
       - name: test

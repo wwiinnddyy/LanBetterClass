@@ -1,0 +1,23 @@
+{
+  "id": "a-screen",
+  "argv": ["$TARGET_DIR/a-screen"],
+  "cwd": ".",
+  "enabled": false,
+  "platforms": ["windows", "linux"],
+  "params": {
+    "source": "device",
+    "capture": "auto",
+    "monitor": 0,
+    "screen": {
+      "poll_ms": 200,
+      "min_interval_ms": 500,
+      "min_dist": 6,
+      "min_mad": 4,
+      "max_width": 0,
+      "max_frames_per_lesson": 0,
+      "max_bytes_per_lesson": 0,
+      "emit_dirty": true
+    },
+    "tuning": "现场调法：先跑一节课，看 blobs/ 里 screen-*.png 的张数与体积，再看 session.close 的 unchanged（无变化次数，很大=门限太高或这门课屏幕根本没动）、throttled（被节流拦下，很大=poll 太快）、capped（触顶，说明上限设小了）。翻页漏采就降 min_dist 或 min_mad；图太碎就抬 min_interval_ms。弱机把 max_width 设 1280、poll_ms 设 500。"
+  }
+}

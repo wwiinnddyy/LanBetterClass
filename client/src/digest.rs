@@ -173,7 +173,7 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         v.sort();
         v
     };
-    for id in ids {
+    for id in &ids {
         let s = &p.sources[id.as_str()];
         let mut flags = Vec::new();
         if s.gaps > 0 {
@@ -184,12 +184,30 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         }
         if let Some(c) = &s.close {
             if c.stream_errors > 0 {
-                flags.push(format!("掉帧 {} 次", c.stream_errors));
+                // 不写"录音"：这个字段现在有两个主人（a-audio 掉帧、a-screen 后端重建）。
+                flags.push(format!("流错误 {} 次", c.stream_errors));
+            }
+            if s.declared.iter().any(|k| k == kinds::SCREEN_KEYFRAME) {
+                flags.push(format!("关键帧 {} 张", c.chunks));
             }
             // 收课一次是常态，不占一行；多条才说明这一节用过不止一套参数，
             // 那时长类数字是几段拼起来的，读摘要的人需要知道。
             if c.closes > 1 {
                 flags.push(format!("收课 {} 次（中途换过采集）", c.closes));
+            }
+        }
+        if let Some(x) = &s.close_extra {
+            // 抓屏自己报的诊断项。它们是调门限要看的唯一东西：一张都不落与
+            // 全部被拦下，在"关键帧 N 张"里看不出差别。
+            let n = |k: &str| x.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+            if n("polls") > 0 {
+                flags.push(format!(
+                    "问 {} 次：无变化 {}、节流 {}、触顶 {}",
+                    n("polls"),
+                    n("unchanged"),
+                    n("throttled"),
+                    n("capped")
+                ));
             }
         }
         if s.over_budget > 0 {
@@ -224,7 +242,20 @@ pub fn render_with(p: &AiPayload, bucket_ms: u64) -> String {
         gaps.push("没有录音：任何师生言语互动、提问层次、讲授占比都不成立");
     }
     if st.stream_errors > 0 {
-        gaps.push("录音掉过采集帧：跨过这些时刻的时长类结论（谁讲了多久、讲授占比）不成立");
+        // 逐源指名道姓：把抓屏的后端重建说成"录音掉帧"，人会去查错的设备。
+        for id in &ids {
+            if let Some(c) = p.sources[id.as_str()].close.as_ref() {
+                if c.stream_errors > 0 {
+                    gaps.push(format!(
+                        "{id} 报过 {} 次采集流错误：跨过这些时刻的时长与时机类结论不成立",
+                        c.stream_errors
+                    ));
+                }
+            }
+        }
+    }
+    if st.keyframes == 0 {
+        gaps.push("没有屏幕关键帧：课件与共享屏幕上出现过什么无法还原（只能靠笔迹与转写）");
     }
     if st.utterances == 0 {
         gaps.push("没有转写：有录音但还没出文字，话语类结论要等云端转写回灌");

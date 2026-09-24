@@ -22,6 +22,7 @@
   <nav class="tabs">
     <button data-tab="lessons" class="active">课程摘要</button>
     <button data-tab="audio">录音</button>
+    <button data-tab="frames">关键帧</button>
     <button data-tab="adapters">数据源配置</button>
     <button data-tab="server">服务端</button>
   </nav>
@@ -56,6 +57,26 @@
           <tbody><tr><td colspan="7" class="empty">未加载</td></tr></tbody>
         </table>
         <div id="audioMore" class="hint"></div>
+      </div>
+    </section>
+
+    <!-- 关键帧：读 /api/lesson/<id> 的 track（屏幕事实），看原图直连 /api/lesson/<id>/blob/<name> -->
+    <section id="tab-frames" class="tab">
+      <div class="frames-pane">
+        <div class="frames-top">
+          <img id="frameView" alt="选中的关键帧" />
+          <div>
+            <div id="frameMeta" class="stats"></div>
+            <div id="frameHint" class="hint">点下面任意一格看那张图（原图走 /blob/，不经文本通道）</div>
+          </div>
+        </div>
+        <div id="frameTicks" class="ticks"></div>
+        <div id="frameFacts" class="digest">先在“课程摘要”里选一节课。</div>
+        <table id="frameTable">
+          <thead><tr><th>时刻</th><th>触发</th><th>差多少</th><th>变化区</th><th>尺寸</th><th>文件</th><th></th></tr></thead>
+          <tbody><tr><td colspan="7" class="empty">未加载</td></tr></tbody>
+        </table>
+        <div id="frameMore" class="hint"></div>
       </div>
     </section>
 

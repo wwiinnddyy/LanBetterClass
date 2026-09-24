@@ -53,12 +53,14 @@ pub struct LessonStats {
     pub pages_touched: usize,
     pub writing_while_speaking_ms: u64,
     pub keyframes: usize,
+    /// 关键帧 blob 的字节总数。“要不要给抓屏加体积上限”这种决定，看的是这个数。
+    pub keyframe_bytes: u64,
     pub audio_chunks: usize,
     pub audio_bytes: u64,
     /// 音频里真正是语音的时长总和。注意它来自 audio.chunk 本身而不是收课记录：
     /// 适配器挂在半路时就没有 close，但已经落盘的段依然是证据。
     pub audio_speech_ms: u64,
-    /// 采集流报错（掉帧）次数之和。大于 0 就不该拿时长下结论。
+    /// 采集流报错次数之和（录音掉帧、抓屏后端重建…）。大于 0 就不该拿时长下结论。
     pub stream_errors: u64,
     pub eval_records: usize,
 }
@@ -83,6 +85,14 @@ pub struct SourceHealth {
     /// 这一节实际生效的采集参数（由 session.open 自述）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vad: Option<VadSnapshot>,
+    /// 抓屏源的开场自述（后端、显示器、生效参数）。故意留成 Value 而不是结构体：
+    /// gdi 报 dpi_aware、dxgi 报 rebuilds，钉成同一份字段就会给没报的那一侧补 0。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<serde_json::Value>,
+    /// 收课记录里 CloseStats 认不下的那些键（抓屏报的 polls / unchanged / throttled / capped）。
+    /// 自动摘出来，是为了让“新适配器报了新事实”不必回头改核心——与开放 kind 同一条理由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_extra: Option<serde_json::Value>,
 }
 
 /// 一个源在这一节课里报过的 `session.close` 汇总。
@@ -148,6 +158,8 @@ struct Accum {
     restart: HashMap<String, u64>,
     close: HashMap<String, CloseStats>,
     vad: HashMap<String, VadSnapshot>,
+    screen: HashMap<String, serde_json::Value>,
+    close_extra: HashMap<String, serde_json::Value>,
 }
 
 /// 上一代事件流的结尾与下一代起点之间的留白。必须大于单条事件自身的跨度
@@ -263,6 +275,9 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                 if let Some(v) = vad_snapshot(&env.payload) {
                     acc.vad.insert(r.adapter_id.clone(), v);
                 }
+                if let Some(v) = screen_snapshot(&env.payload) {
+                    acc.screen.insert(r.adapter_id.clone(), v);
+                }
             }
             kinds::INK_PAGE_ACTIVATE => {
                 if let Ok(p) = serde_json::from_value::<PageActivate>(env.payload.clone()) {
@@ -367,6 +382,9 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
             kinds::SCREEN_KEYFRAME => {
                 if let Ok(k) = serde_json::from_value::<Keyframe>(env.payload.clone()) {
                     stats.keyframes += 1;
+                    // 字节从每条事件累加，不等 close：适配器挂在半路时根本没有收课记录，
+                    // 但已经落盘的图依旧是证据（与 audio_bytes 同一条理由）。
+                    stats.keyframe_bytes += k.len;
                     let where_ = k.matched_page_id.clone().unwrap_or_else(|| "未匹配到课件页".to_string());
                     track.push(TrackItem {
                         t0_ms: k.t_ms + base,
@@ -375,7 +393,9 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                         kind: env.kind.clone(),
                         text: format!("屏幕关键帧（触发={}，{where_}）", k.trigger),
                         refs: vec![k.blob],
-                        detail: None,
+                        // 观察端要排时间线、要说清"这张比上一张差多少"，光靠上面那句人话不够。
+                        // 只带真报了名的字段：没报的不能补 0，否则"这个源什么也没说"永不成立。
+                        detail: pick(&env.payload, &["trigger", "source", "dist", "mad", "width", "height", "dirty"]),
                     });
                 }
             }
@@ -410,6 +430,11 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
                 // 发生的事。塞进 track 还会顺手改掉 duration_ms（那是 max(t1)），
                 // 于是"课有多长"被"进程跑了多久"污染。所以它只进每个源的健康表。
                 let cur = close_of(&env.payload);
+                if let Some(x) = close_extras(&env.payload) {
+                    // 后到的覆盖先到的：一节课重启过就有好几代，而 close.closes > 1
+                    // 已经说明换过参数，这里只需留最新一代的额外事实。
+                    acc.close_extra.insert(r.adapter_id.clone(), x);
+                }
                 match acc.close.get_mut(&r.adapter_id) {
                     Some(prev) => add_close(prev, cur),
                     None => {
@@ -435,13 +460,15 @@ pub fn build(meta: &LessonMeta, records: &[StoredRecord]) -> AiPayload {
     stats.audio_bytes = audio_bytes;
     stats.pages_touched = pages.len();
     stats.longest_silence_ms = longest_silence;
-    // 掉帧次数只有一个来源：各源自己报的收课记录。再汇总进 stats，摘要与看板
+    // 流错误次数只有一个来源：各源自己报的收课记录。再汇总进 stats，摘要与看板
     // 就不必各自去遍历 sources 算一遍（那些地方很容易算不一样）。
     stats.stream_errors = acc.close.values().map(|c| c.stream_errors).sum();
     for (id, c) in acc.close.iter() {
         if c.stream_errors > 0 {
+            // 措辞不指名"录音"：这个字段现在有两个主人（a-audio 掉帧、a-screen 后端重建），
+            // 把抓屏的重建说成掉帧会把人引向完全错的一头。
             warnings.push(format!(
-                "{id} 的录音掉过 {} 次采集帧：跨过这些点的时长类结论（谁讲了多久、讲授占比）不成立",
+                "{id} 报过 {} 次采集流错误（掉帧 / 后端重建）：跨过这些时刻的时长与时机类结论不成立",
                 c.stream_errors
             ));
         }
@@ -512,6 +539,8 @@ fn health(acc: &Accum) -> HashMap<String, SourceHealth> {
                 restarts: acc.restart.get(id).copied().unwrap_or(0),
                 close: acc.close.get(id).cloned(),
                 vad: acc.vad.get(id).cloned(),
+                screen: acc.screen.get(id).cloned(),
+                close_extra: acc.close_extra.get(id).cloned(),
                 silent: !declared.is_empty() && acc.accepted.get(id).copied().unwrap_or(0) == 0,
             },
         );
@@ -673,6 +702,48 @@ fn vad_snapshot(p: &serde_json::Value) -> Option<VadSnapshot> {
     })
 }
 
+/// 抓屏源的开场自述。整份留着，只把 source / lesson_id 摘掉（健康表外面已经有一份）。
+/// 判据是载荷里有没有非空的 `screen` 参数对象：只有真的抓屏源会带它，
+/// 所以录音源不会被误认成抓屏源。
+fn screen_snapshot(p: &serde_json::Value) -> Option<serde_json::Value> {
+    if p.get("screen")?.as_object()?.is_empty() {
+        return None;
+    }
+    let mut out = p.as_object()?.clone();
+    out.remove("source");
+    out.remove("lesson_id");
+    Some(serde_json::Value::Object(out))
+}
+
+/// `CloseStats` 已经认下的键。剩下的原样进 `close_extra`，不丢——
+/// 一个适配器自创的收课事实（抓屏的 polls / unchanged / throttled / capped）
+/// 不该因为核心不认识它而消失。
+const CLOSE_KNOWN: &[&str] = &[
+    "source",
+    "lesson_id",
+    "chunks",
+    "bytes",
+    "silent_chunks",
+    "voiced_ms",
+    "dropped_short",
+    "stream_errors",
+    "audio_ms",
+    "wall_ms",
+    "wall_s",
+    "error",
+];
+
+fn close_extras(p: &serde_json::Value) -> Option<serde_json::Value> {
+    let m = p.as_object()?;
+    let mut out = serde_json::Map::new();
+    for (k, v) in m {
+        if !CLOSE_KNOWN.contains(&k.as_str()) {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    (!out.is_empty()).then_some(serde_json::Value::Object(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::build;
@@ -822,6 +893,69 @@ mod tests {
         let without = build(&meta(), &vec![chunk(1, 1_000, serde_json::json!({}))]);
         assert!(without.track[0].detail.is_none(), "旧版源什么都没报时不该出现空对象");
         assert_eq!(without.stats.audio_speech_ms, 0);
+    }
+
+    #[test]
+    fn screen_source_reports_backend_params_and_detail() {
+        // 抓屏源进导出时要能看到三件事：用的哪条后端、本节课生效的参数、
+        // 每张关键帧"比上一张差多少"。缺任何一个，观察端就只能在人话上猜。
+        let open = rec(
+            "a-screen",
+            1,
+            kinds::SESSION_OPEN,
+            0,
+            serde_json::json!({
+                "source": "a-screen", "lesson_id": "L-test", "input": "device",
+                "backend": "gdi", "monitor": 0, "width": 1920, "height": 1080, "dpi_aware": true,
+                "screen": { "poll_ms": 200, "min_dist": 6, "min_mad": 4 }
+            }),
+        );
+        let kf = rec(
+            "a-screen",
+            2,
+            kinds::SCREEN_KEYFRAME,
+            4_000,
+            serde_json::json!({
+                "blob": "screen-000000004000ms-00002.png", "len": 4096, "t_ms": 4_000,
+                "trigger": "phash", "dist": 11, "mad": 7, "width": 1920, "height": 1080,
+                "dirty": [120, 40, 800, 600], "source": "a-screen"
+            }),
+        );
+        let close = rec(
+            "a-screen",
+            3,
+            kinds::SESSION_CLOSE,
+            9_000,
+            serde_json::json!({
+                "source": "a-screen", "chunks": 1, "bytes": 4096, "wall_ms": 9_000,
+                "polls": 45, "unchanged": 40, "throttled": 3, "capped": 0, "stream_errors": 2
+            }),
+        );
+        let p = build(&meta(), &vec![open, kf, close]);
+        let h = &p.sources["a-screen"];
+        let s = h.screen.clone().expect("抓屏自述要进健康表");
+        assert_eq!(s["backend"], "gdi");
+        assert_eq!(s["screen"]["min_dist"], 6);
+        assert!(s.get("source").is_none(), "自述里不该再留一份 source");
+        let x = h.close_extra.clone().expect("CloseStats 认不下的收课字段要原样留着");
+        assert_eq!((x["polls"], x["unchanged"], x["throttled"]), (45, 40, 3));
+        assert_eq!(p.stats.keyframes, 1);
+        assert_eq!(p.stats.keyframe_bytes, 4096);
+        let d = p.track.iter().find(|t| t.kind == kinds::SCREEN_KEYFRAME).unwrap().detail.clone().unwrap();
+        assert_eq!((d["dist"], d["trigger"], d["dirty"]), (serde_json::json!(11), serde_json::json!("phash"), serde_json::json!([120, 40, 800, 600])));
+        // 抓屏后端的重建不许被说成"录音掉帧"。
+        assert!(p.warnings.iter().any(|w| w.contains("采集流错误") && w.contains("a-screen")), "{:?}", p.warnings);
+        assert!(!p.warnings.iter().any(|w| w.contains("录音")), "抓屏的错不该安到录音头上：{:?}", p.warnings);
+    }
+
+    #[test]
+    fn audio_only_close_has_no_extra_and_no_screen_block() {
+        // 反向断言：新增的两个字段不许给只有录音的课凭空多出东西来。
+        let p = build(&meta(), &vec![chunk(1, 1_000, serde_json::json!({"rms": 300.0}))]);
+        let h = &p.sources["a-audio"];
+        assert!(h.screen.is_none(), "录音源不该有抓屏自述");
+        assert!(h.close_extra.is_none(), "只有通用字段的 close 不该产生 extra");
+        assert_eq!(p.stats.keyframes, 0);
     }
 
     #[test]

@@ -78,6 +78,7 @@ main { flex: 1; overflow: hidden; }
 .tab#tab-adapters.active { display: block; overflow: auto; padding: 16px 18px; }
 .tab#tab-server.active { display: block; overflow: auto; }
 .tab#tab-audio.active { display: block; overflow: auto; }
+.tab#tab-frames.active { display: block; overflow: auto; }
 
 /* 录音页 */
 .audio-pane { padding: 14px 18px; }
@@ -90,6 +91,31 @@ main { flex: 1; overflow: hidden; }
 .digest .bad { color: var(--bad); }
 table summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
 table details > div { margin-top: 8px; }
+
+/* 关键帧页 */
+.frames-pane { padding: 14px 18px; }
+.frames-top { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; margin-bottom: 10px; }
+.frames-top > div { flex: 1; min-width: 280px; }
+/* 原图容器定宽 + contain：一节课里可能同时有 1080p 全屏与课件局部，
+   不封顶的话一张大图会把整张表格顶到看不见。 */
+#frameView {
+  width: 420px; max-width: 100%; max-height: 280px; object-fit: contain;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+}
+/* 还没选帧时别留一个空图框 + alt 文本占位 */
+#frameView:not([src]) { display: none; }
+.frames-pane .hint { padding: 0; }
+#frameFacts { margin-bottom: 12px; }
+
+/* 时间轴刻度：按钮只当“第几帧”的把手，密不密由 JS 抽样决定，不在这里挤。 */
+.ticks { position: relative; height: 32px; margin: 0 0 12px; border-bottom: 1px solid var(--line); }
+.ticks .hint { position: absolute; right: 0; bottom: 2px; font-size: 11px; }
+.tick {
+  position: absolute; bottom: 8px; transform: translateX(-50%);
+  padding: 1px 4px; font-size: 10.5px; line-height: 1.3; color: var(--dim);
+  background: var(--panel); border-radius: 4px;
+}
+.tick:hover { color: var(--fg); border-color: var(--accent); }
 
 /* 电平横条：纯 CSS 宽度，不解码音频、不引 Web Audio。
    两条竖线是开/关门限在同一标尺上的位置——段长不过线就是门限设高了。 */
@@ -104,10 +130,12 @@ table details > div { margin-top: 8px; }
 .tune { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 6px 0 12px; }
 .tune-grid { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
 .tune-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--dim); }
-.tune-grid input[type="number"], .tune-grid input[type="text"] {
+.tune-grid input[type="number"], .tune-grid input[type="text"], .tune-grid select {
   background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
   color: var(--fg); padding: 5px 7px; width: 110px; font: 12.5px ui-monospace, Consolas, monospace;
 }
+/* 后端名与字段名同长，110px 会把 "dxgi" 截成看不全的样子 */
+.tune-grid select { width: auto; min-width: 110px; }
 .tune-eff { color: var(--dim); font-size: 11.5px; margin-top: 8px; }
 .tune-eff.pending { color: var(--bad); }
 .tune-check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); }

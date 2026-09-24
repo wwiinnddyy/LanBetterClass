@@ -3,6 +3,7 @@
 /.ci-tmp
 /.ci-integ
 /.ci-audio
+/.ci-screen
 /.ci-artifacts
 /try
 /agent/src-tauri/target/

@@ -332,6 +332,9 @@ fn merge_decl(file: &str, want: &Value) -> Result<Value, String> {
         if let Some(vad) = p.get("vad") {
             vad_is_sane(vad)?;
         }
+        if p.contains_key("screen") || p.contains_key("capture") || p.contains_key("monitor") {
+            screen_is_sane(p)?;
+        }
         let size = serde_json::to_vec(v).map(|b| b.len()).unwrap_or(usize::MAX);
         if size > MAX_PARAMS_BYTES {
             return Err(format!("{file}: params 序列化后 {size} 字节，超过 {MAX_PARAMS_BYTES} 上限"));
@@ -362,6 +365,67 @@ fn vad_is_sane(vad: &Value) -> Result<(), String> {
             return Err(format!(
                 "vad.rms_close（{c}）必须低于 vad.rms_open（{o}）：关段门限不低于开段门限时，语音段永远关不掉"
             ));
+        }
+    }
+    Ok(())
+}
+
+/// 抓屏参数的同一套尺：只拦"会被适配器静默钳掉、于是采出来的东西与教师想的不一样"那几类。
+/// 上下界都拿得到（dHash 只有 64 位），写超了不是报错就是拿到一整节几乎没帧的课。
+/// 后端清单以 `client/adapters/a-screen/src/capture.rs` 的 `BACKENDS` 为准，
+/// 而 64 这个上界以 `phash.rs` 的 `HASH_COLS × HASH_ROWS` 为准——两边一致由
+/// `tools/ci-screen.sh` ⑧ 交叉断言（核心不能依赖适配器 crate，所以只能在文本层面钓）。
+fn screen_is_sane(params: &serde_json::Map<String, Value>) -> Result<(), String> {
+    if let Some(c) = params.get("capture") {
+        let s = c.as_str().ok_or("params.capture 必须是字符串（auto / gdi / dxgi）")?;
+        if !matches!(s, "auto" | "gdi" | "dxgi") {
+            return Err(format!("params.capture 只认 auto / gdi / dxgi，收到 {s:?}"));
+        }
+    }
+    if let Some(v) = params.get("monitor").and_then(|x| x.as_u64()) {
+        if v > 15 {
+            // 显示器序号不是“越大越可能命中”：写错了只会让这一节课安静地没帧。
+            return Err(format!("params.monitor 是显示器序号（0 = 主屏），收到 {v}"));
+        }
+    } else if params.contains_key("monitor") {
+        return Err("params.monitor 必须是非负整数（显示器序号，0 = 主屏）".into());
+    }
+    let Some(s) = params.get("screen") else { return Ok(()) };
+    let s = s.as_object().ok_or("params.screen 必须是个对象")?;
+    let bad_num = |k: &str| format!("params.screen.{k} 必须是非负整数");
+    for k in ["poll_ms", "min_interval_ms", "min_dist", "min_mad", "max_width", "max_frames_per_lesson", "max_bytes_per_lesson"] {
+        if let Some(v) = s.get(k) {
+            if !v.as_u64().is_some() {
+                return Err(bad_num(k));
+            }
+        }
+    }
+    // 开关型也要拦：写 "false"（字符串）在适配器里走的是 unwrap_or(default)，
+    // 于是一个错类型的输入被读成了“没写”，而默认值是 true。
+    if let Some(v) = s.get("emit_dirty") {
+        if !v.is_boolean() {
+            return Err("params.screen.emit_dirty 必须是 true / false".into());
+        }
+    }
+    if let Some(v) = s.get("poll_ms").and_then(|x| x.as_u64()) {
+        if v == 0 {
+            // 适配器会把它钳到 1ms——等于让采集进程满转把一体机压死。比钳更坑的是没人知道。
+            return Err("params.screen.poll_ms 不能是 0：那会变成每毫秒抓一屏，把一体机压死".into());
+        }
+    }
+    if let Some(v) = s.get("min_dist").and_then(|x| x.as_u64()) {
+        if v > 64 {
+            return Err(format!("params.screen.min_dist 最大 64（dHash 只有 64 位），收到 {v}：写这么大等于要求这一节课不落任何一帧"));
+        }
+    }
+    if let Some(v) = s.get("min_mad").and_then(|x| x.as_u64()) {
+        if v > 255 {
+            return Err(format!("params.screen.min_mad 最大 255（网格亮度差），收到 {v}"));
+        }
+    }
+    if let Some(v) = s.get("max_width").and_then(|x| x.as_u64()) {
+        if v > 0 && v < 128 {
+            return Err(format!("params.screen.max_width 要么 0（原尺寸）要么 ≥ 128，收到 {v}：那么小的图谁都读不出课件上的字"));
         }
     }
     Ok(())
@@ -562,6 +626,43 @@ mod tests {
         assert!(vad_is_sane(&json!({ "min_speech_ms": 0 })).is_ok());
         // 超限值交给适配器，服务端不抄第二份会漂移的校验（frame_ms < 5 会被丢弃用默认）。
         assert!(vad_is_sane(&json!({ "frame_ms": 1, "max_segment_ms": 10 })).is_ok());
+    }
+
+    fn p(v: Value) -> serde_json::Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    /// 抓屏参数里只有"会被适配器静默钳掉"的那几类值得在写盘前拦。
+    /// 拦错方向也一样糟糕：把合法值拒了，教师就再也改不动采集了。
+    #[test]
+    fn screen_params_are_checked_for_silent_clamps() {
+        // 合法：默认值、原尺寸、不设上限、稀疏到 5 分钟一帧。
+        assert!(screen_is_sane(&p(json!({ "capture": "dxgi" }))).is_ok());
+        assert!(screen_is_sane(&p(json!({ "capture": "auto", "screen": { "poll_ms": 200, "min_dist": 6, "min_mad": 4, "max_width": 0, "max_frames_per_lesson": 0 } }))).is_ok());
+        assert!(screen_is_sane(&p(json!({ "screen": { "min_interval_ms": 300_000, "max_bytes_per_lesson": 500_000_000 } }))).is_ok());
+        // 开关写成字符串会被 unwrap_or(default) 读成“没写”，而默认是 true。
+        assert!(screen_is_sane(&p(json!({ "screen": { "emit_dirty": "false" } }))).is_err());
+        // 显示器序号写错不会报错，只会整节课安静地没帧。
+        assert!(screen_is_sane(&p(json!({ "monitor": 3 }))).is_ok());
+        assert!(screen_is_sane(&p(json!({ "monitor": 99 }))).is_err());
+        assert!(screen_is_sane(&p(json!({ "monitor": "主屏" }))).is_err());
+        // 不存在的后端：起不来只会让这一节课默默没帧，当场报错比那个便宜。
+        assert!(screen_is_sane(&p(json!({ "capture": "x11" }))).is_err());
+        assert!(screen_is_sane(&p(json!({ "capture": true }))).is_err());
+        // poll_ms=0 会被钳成 1ms，等于每毫秒抓一屏。
+        assert!(screen_is_sane(&p(json!({ "screen": { "poll_ms": 0 } }))).is_err());
+        // dHash 只有 64 位：写 999 不是"更宽松"，是永远不落帧。
+        assert!(screen_is_sane(&p(json!({ "screen": { "min_dist": 65 } }))).is_err());
+        assert!(screen_is_sane(&p(json!({ "screen": { "min_mad": 256 } }))).is_err());
+        // 负数与字符串都不是数。
+        assert!(screen_is_sane(&p(json!({ "screen": { "min_dist": -1 } }))).is_err());
+        assert!(screen_is_sane(&p(json!({ "screen": { "max_width": "1280" } }))).is_err());
+        assert!(screen_is_sane(&p(json!({ "screen": 7 }))).is_err());
+        // 127px 的屏幕图谁也读不出字，而哈希网格也会退化。
+        assert!(screen_is_sane(&p(json!({ "screen": { "max_width": 127 } }))).is_err());
+        assert!(screen_is_sane(&p(json!({ "screen": { "max_width": 128 } }))).is_ok());
+        // 整条路：经 merge_decl 进去的也要被拦下（那才是真实请求体）。
+        assert!(merge_decl("a-screen.adapter.json", &json!({ "params": { "screen": { "min_dist": 999 } } })).is_err());
     }
 
     #[test]

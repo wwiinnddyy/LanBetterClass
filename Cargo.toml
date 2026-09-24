@@ -5,7 +5,15 @@
 #   shared/  三端共享契约（crate 名仍为 classagent-schema，保持稳定 import）
 [workspace]
 resolver = "2"
-members = ["shared", "client", "server", "client/adapters/a-fake", "client/adapters/a-audiofile", "client/adapters/a-audio"]
+members = [
+    "shared",
+    "client",
+    "server",
+    "client/adapters/a-fake",
+    "client/adapters/a-audiofile",
+    "client/adapters/a-audio",
+    "client/adapters/a-screen",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -22,6 +30,19 @@ tiny_http = "0.12"
 # 只有 a-audio 用得到它：跨平台取麦克风。不放 reqwest/portaudio 一类，
 # 是因为这个依赖只该长在一个适配器子进程里，客户端与服务端的树保持不动。
 cpal = "0.18"
+# 只有 a-screen 用得到这两个，同理不长进主树：
+# png 是纯 Rust 编解码（关键帧 blob 要能被 <img src> 直接显示，第三方写来的 PNG 也要能读）；
+# windows 只负责 GDI / DXGI 抓屏绑定，且只在 Windows 侧编译（见 a-screen/Cargo.toml 的 target 段）。
+png = "0.18"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # 这台机器的磁盘是约束条件之一：debug=0 省掉 Windows 上体积最大的 PDB。
 [profile.dev]

@@ -63,7 +63,9 @@ requires recompiling the client.
 - `client/src/` — `protocol`, `supervisor`, `store`, `timeline`, `digest`, `serve`, `push`.
 - `client/adapters/*` — out-of-process data sources: `a-fake` (scripted), `a-audiofile` (blob convention),
   `a-audio` (the real one: cpal capture + energy-VAD turns; `source: "fixture"` replays a wav through the
-  same pipeline, which is what makes it testable on a runner with no sound card).
+  same pipeline, which is what makes it testable on a runner with no sound card),
+  `a-screen` (keyframes: GDI BitBlt or DXGI desktop duplication + dHash change gate; `source: "fixture"`
+  replays a directory of PNGs through the same decide-and-store path — same trick, same reason).
 - `adapters.d/*.adapter.json` — per-environment load declarations (drop in = enable, rename = disable).
 
 **Adapter lifecycle contract**: `StopLesson` is where an adapter flushes, and the client keeps reading its
@@ -75,8 +77,27 @@ stdout for a short quiet window after sending it and before closing the lesson. 
 capture process, not things that happened in the classroom, so `timeline::build` keeps them out of `track`
 and folds them into `sources[<id>].close` / `.restarts` instead. Putting them in `track` would also inflate
 `stats.duration_ms` (which is `max(t1_ms)`) into wall-clock process time. Per-segment numbers a teacher or
-model can actually read are `track[].detail` (`rms` / `peak` / `speech_ms`, only for sources that reported
-them — absent is not zero).
+model can actually read are `track[].detail` (`rms` / `peak` / `speech_ms` for audio, `trigger` / `dist` /
+`mad` / `dirty` for keyframes — only for sources that reported them, absent is not zero).
+
+`CloseStats` is a closed struct, but adapters keep inventing new close facts, so `timeline` harvests every
+key it does not recognize into `sources[<id>].close_extra` (a `Value`). That is deliberate: adding a
+diagnostic to an adapter must not require a core change, and the observer/digest read whatever was reported.
+
+### Keyframe semantics (`a-screen`) — four things that are not obvious from the code
+
+- **Two gates, joined by OR**: `min_dist` (dHash Hamming distance, max 64) catches layout change but is blind
+  to a region inverting black→white (neighbour relations survive); `min_mad` (mean absolute grid difference)
+  catches that, and is in turn blind to a same-cell content swap. Raising only one therefore often fails to
+  reduce frames — the UI has to say so, and does.
+- **A rejected sample must not update the reference frame.** If it did, a slow page scroll would read as
+  "changed a little each time" and a whole board page would vanish silently. The reference is the last
+  *emitted* frame; `unchanged` / `throttled` / `capped` counts land in `close_extra`.
+- **`capture` has exactly one source of truth**: `capture.rs::BACKENDS`. `serve.rs`'s 400-whitelist and the
+  observer's dropdown are cross-asserted against it (`tools/ci-screen.sh` ⑧ + `agent.yml`), because drift
+  there is invisible at runtime — the value writes fine and the adapter just never starts.
+- **`stats.stream_errors` now has two owners** (audio dropouts, DXGI `ACCESS_LOST` rebuilds). Any wording
+  that says "录音" is wrong; `timeline` and `digest` say "采集流错误" and name the source.
 
 ### Configuration semantics (undocumented, this bites)
 
@@ -84,6 +105,10 @@ them — absent is not zero).
 `params`; `argv` / `cwd` / `id` / `platforms` are refused with 400. `--allow-write` rests on "the teacher on
 this machine is trusted", and a writable `argv` would turn a configuration endpoint into local code
 execution. `params` is deep-merged, so submitting one `vad.rms_open` never deletes its sibling keys.
+
+The endpoint also refuses values the adapter would silently clamp: `screen.min_dist` above 64 (dHash is 64
+bits) or `poll_ms: 0` (clamped to 1ms = one grab per millisecond) are 400s, not warnings. A threshold that
+gets clamped produces a lesson with almost no frames and no clue as to why.
 
 Edits take effect **next lesson**, and that is structural rather than lazy: `serve` and `run` are separate
 processes with no IPC between them, so the write endpoint can only touch the file. `start_lesson` re-reads
@@ -112,14 +137,25 @@ workflow, `.github/workflows/agent.yml`.
   Scenario ⑤ covers the teacher's whole tuning loop (POST the new threshold → next lesson reads it back from
   the adapter's own `session.open` self-report), and ⑥ asserts a blob comes back as `audio/wav` with the same
   bytes as on disk — that is what lets the observer play it back through a plain `<audio src>`.
+- `tools/ci-screen.sh` prints `SCREEN OK`: it hand-writes PNGs with `zlib` + `struct` (no PIL — the adapter
+  must parse a file a *third party* wrote, same reasoning as `wave` above), then asserts a 6-page deck yields
+  6 frames, a 13-image still yields exactly **1** frame with `unchanged == 12`, throttling counts, that a
+  lesson cut off mid-page still flushes its `trigger: "close"` tail frame plus `session.close` into that
+  lesson, and the tuning loop over `screen.min_dist`. The reverse assertion is the point: "nothing changed"
+  masquerading as "many changes" turns the evidence into thousands of near-identical screenshots nobody opens.
+  There is no `libasound2`-style dep — the device branch is guarded as "must not crash, must not invent blob
+  references", and ⑧ cross-checks the three copies of the backend list.
 - `tools/ci-smoke.sh` also drives the write endpoint's four boundaries (params accepted, `argv` refused with
   the file byte-identical, reversed hysteresis refused, non-object refused) and a same-process reload guard:
   `stop` → edit `params` on disk → `start`, asserting the next lesson's segments are 8000 bytes instead of
   32000. That pair is the only proof that "next lesson takes effect" is real rather than a slogan.
-- `.github/workflows/agent.yml` runs a seconds-level text guard over `agent/ui/` before building: playback
-  must go through `/blob/` and never through the text-only `http_get`, the nine tuning field names must match
-  the keys `a-audio` actually reads, and every `#id` referenced by `app.js` must exist in `index.html`. A typo
-  in any of those three fails silently at runtime, so it has to be loud here.
+- `.github/workflows/agent.yml` runs a seconds-level text guard over `agent/ui/` before building: binary
+  playback (audio *and* keyframe images) must go through `/blob/` and never through the text-only `http_get`,
+  the nine `a-audio` and ten `a-screen` tuning field names must match the keys those adapters actually read,
+  the `capture` dropdown must equal `capture.rs::BACKENDS`, and every `#id` referenced by `app.js` must exist
+  in `index.html`. A typo in any of those fails silently at runtime, so it has to be loud here.
+  These guards are pure text — run them locally before pushing; a regex that never matches looks identical to
+  a passing guard, and that bug was actually caught this way.
 - Renaming a module means touching `ci.yml` artifact paths, `tools/*.sh`, and `docs/*.html` — grep for the
   old binary name before considering a rename done.
 - `debug = 0` and `strip`/`lto` are set in the workspace `Cargo.toml` because disk size matters; do not
