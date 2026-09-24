@@ -746,7 +746,7 @@ fn close_extras(p: &serde_json::Value) -> Option<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::build;
+    use super::{build, pick};
     use classagent_schema::{kinds, Envelope, LessonInfo, LessonMeta, RecordStatus, StoredRecord};
 
     fn meta() -> LessonMeta {
@@ -938,14 +938,16 @@ mod tests {
         assert_eq!(s["screen"]["min_dist"], 6);
         assert!(s.get("source").is_none(), "自述里不该再留一份 source");
         let x = h.close_extra.clone().expect("CloseStats 认不下的收课字段要原样留着");
-        assert_eq!(
-            (x["polls"], x["unchanged"], x["throttled"]),
-            (serde_json::json!(45), serde_json::json!(40), serde_json::json!(3))
-        );
+        assert_eq!(x["polls"], serde_json::json!(45));
+        assert_eq!(x["unchanged"], serde_json::json!(40));
+        assert_eq!(x["throttled"], serde_json::json!(3));
         assert_eq!(p.stats.keyframes, 1);
         assert_eq!(p.stats.keyframe_bytes, 4096);
         let d = p.track.iter().find(|t| t.kind == kinds::SCREEN_KEYFRAME).unwrap().detail.clone().unwrap();
-        assert_eq!((d["dist"], d["trigger"], d["dirty"]), (serde_json::json!(11), serde_json::json!("phash"), serde_json::json!([120, 40, 800, 600])));
+        // 三项得分开比：凑成一个元组就要把 Value 从索引里搬出来，而 Value 不是 Copy。
+        assert_eq!(d["dist"], serde_json::json!(11));
+        assert_eq!(d["trigger"], serde_json::json!("phash"));
+        assert_eq!(d["dirty"], serde_json::json!([120, 40, 800, 600]));
         // 抓屏后端的重建不许被说成"录音掉帧"。
         assert!(p.warnings.iter().any(|w| w.contains("采集流错误") && w.contains("a-screen")), "{:?}", p.warnings);
         assert!(!p.warnings.iter().any(|w| w.contains("录音")), "抓屏的错不该安到录音头上：{:?}", p.warnings);
