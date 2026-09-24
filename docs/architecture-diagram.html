@@ -80,7 +80,7 @@
     <rect x="240" y="172" width="4" height="58" rx="2" fill="#9ece6a"/>
     <text class="tt" x="254" y="192">a-screen</text>
     <text class="s" x="254" y="209">GDI / DXGI + dHash 变化门限</text>
-    <text class="g" x="254" y="224">已实现 + CI 断言，未真机跑过</text>
+    <text class="g" x="254" y="224">已实现 + CI 断言，真机待验</text>
 
     <rect x="436" y="172" width="186" height="58" rx="8" fill="#1a1f28" stroke="#2a3242"/>
     <rect x="436" y="172" width="4" height="58" rx="2" fill="#f7768e"/>
@@ -264,7 +264,7 @@
     <text class="s" x="44" y="772">三端已连：① client push → ② server ingest（HTTP/1.1 + token，幂等去重）；③ agent 同时读 ① 的 serve 与 ② 的查询接口 —— 都是真实请求，CI 与本机各验过一遍。</text>
     <text class="s" x="44" y="792">输入侧模块化 = 独立子进程适配器，插拔不改客户端；契约单一来源 shared/（crate 名 classagent-schema），客户端与服务端共用同一份类型与 kind 约定。</text>
     <text class="s" x="44" y="812">录音与屏幕两条都已接通：a-audio 按话轮切段，a-screen 只在画面真变了时落一张 PNG（两道门限是“或”：dHash 看不见整块变亮，均差看不见同位格换内容）；两者的尾帧与 session.close 都落在同一节课里。</text>
-    <text class="s" x="44" y="830" fill="#b9c3d6">但两条都只验了半：CI 跑的是 fixture 回放，真麦克风与真桌面（尤其 DXGI 在高刷 / HDR / 锁屏下）从未在目标一体机上跑过。音频也未做重采样与压缩（48k 单声道约 5.8 MB/分钟）。还差的：④ 下游真正接模型（请求单已可回放），以及 a-whiteboard。链没做完整之前，「AI 结论」不该对外宣称。</text>
+    <text class="s" x="44" y="830" fill="#b9c3d6">但两条都只验了半：CI 跑的是 fixture 回放（顺带在 Windows runner 上用 gdi 真采到了一帧 1080p，一张≈ 2.3 MB）；真麦克风与真桌面（尤其 DXGI 在高刷 / HDR / 锁屏下，以及多屏与 DPI）从未在目标一体机上跑过。音频也未做重采样与压缩（48k 单声道约 5.8 MB/分钟）。还差的：④ 下游真正接模型（请求单已可回放），以及 a-whiteboard。链没做完整之前，「AI 结论」不该对外宣称。</text>
   </g>
 </svg>
 </div>

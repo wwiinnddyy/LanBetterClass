@@ -154,10 +154,13 @@ workflow, `.github/workflows/agent.yml`.
   lesson, and the tuning loop over `screen.min_dist`. The reverse assertion is the point: "nothing changed"
   masquerading as "many changes" turns the evidence into thousands of near-identical screenshots nobody opens.
   There is no `libasound2`-style dep — the device branch is guarded as "must not crash, must not invent blob
-  references", and ⑧ cross-checks the three copies of the backend list. When asserting "this source produced
-  nothing", filter `events.ndjson` by `adapter_id`: the core writes its own facts into the same file
-  (`core.admit` is ~1 KB per loaded source), so an unfiltered count reads "no desktop on this machine" as
-  "emitted events but no close record" — two different diagnoses and two different fixes.
+  references", and ⑧ cross-checks the three copies of the backend list. On `windows-latest` that branch is not
+  hypothetical: `gdi` opens a real 1920×1080 desktop, writes one PNG (~2.3 MB), and reads 60 of 61 polls as
+  `unchanged` — so ③ doubles as a live check of the gates and the writer, while `ubuntu-latest` checks the
+  "no desktop" path. Neither checks a real all-in-one (multi-monitor, DPI, DXGI). When asserting
+  "this source produced nothing", filter `events.ndjson` by `adapter_id`: the core writes its own facts
+  into the same file (`core.admit` is ~1 KB per loaded source), so an unfiltered count reads "no desktop
+  on this machine" as "emitted events but no close record" — two different diagnoses and two different fixes.
 - `tools/ci-smoke.sh` also drives the write endpoint's four boundaries (params accepted, `argv` refused with
   the file byte-identical, reversed hysteresis refused, non-object refused) and a same-process reload guard:
   `stop` → edit `params` on disk → `start`, asserting the next lesson's segments are 8000 bytes instead of

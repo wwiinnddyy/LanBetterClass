@@ -58,8 +58,9 @@
   <div class="box b-part"><span class="tag part">已实现未实测</span><h3>a-screen</h3>
     <p>希沃那一屏：GDI BitBlt 或 DXGI 桌面复制 → <b>只在画面真变了时</b>落一张 PNG。两道门限是“或”关系：
        dHash（≤ 64）认结构变化但看不见整块黑变白，均差（≤ 255）补这一刀。不做连续视频。
-       <code>source:"fixture"</code> 回放一排 PNG 走同一套判定，这是 CI 能钉住的那一半；
-       <b>未实测</b>：真机上的 gdi/dxgi 两条后端与多屏选择</p></div>
+       <code>source:"fixture"</code> 回放一排 PNG 走同一套判定，这是 CI 能钉住的那一半；而 Windows runner 上
+       <code>gdi</code> 确实开到了一块 1920×1080 桌面并落了一张真 PNG（61 次询问里 60 次判为“无变化”）。
+       <b>未实测</b>：真一体机上的 gdi/dxgi 两条后端、多屏选择与 DPI</p></div>
   <div class="box b-tbd"><span class="tag tbd">需求未定</span><h3>a-eval / a-courseware</h3>
     <p>评估数据是什么还不知道；课件原文件可直接解析，因此不需要 OCR 屏幕</p></div>
 </div>
@@ -92,8 +93,9 @@
 <div class="grid g3">
   <div class="box b-done"><h3>音频</h3><p>Opus 16k 单声道 45 分钟 ≈ <b>5–10 MB</b>（实测 300 段 / 9.2 MB 未压缩 PCM 口径）</p></div>
   <div class="box b-done"><h3>事件</h3><p>笔迹+评估+健康 ≈ <b>&lt; 1 MB</b>。带宽从来不是瓶颈</p></div>
-  <div class="box b-part"><h3>屏幕</h3><p>只存<b>变化时刻</b>的关键帧，不存视频。一节课存多少张由两道门限与
-    <code>min_interval_ms</code> 决定，<code>max_frames / max_bytes</code> 可封顶；撞顶不丢数据，而是在收课记录里记
+  <div class="box b-part"><h3>屏幕</h3><p>只存<b>变化时刻</b>的关键帧，不存视频。一张 1080p 全屏 PNG 实测
+    <b>≈ 2.3 MB</b>（不降采样的时候），所以帧数是唯一体积变量：一节课存多少张由两道门限与
+    <code>min_interval_ms</code> 决定，<code>max_width</code> / <code>max_frames / max_bytes</code> 可封顶；撞顶不丢数据，而是在收课记录里记
     <code>capped</code>，健康表与摘要会直说“之后的画面没存档”</p></div>
   <div class="box b-plan"><h3>视频</h3><p>1080p 一节课 <b>1.35–2.7 GB</b>，是音频的 150–300 倍 → 一旦要做连续视频，架构被迫上边缘盒。我们没有边缘盒，所以不做</p></div>
 </div>
@@ -115,7 +117,7 @@
 </div>
 
 <div class="warn"><b>还没证明的事：</b>"低开销"目前只测到事件总线（真实节奏 0.02% CPU / 11 MB 工作集，Core Ultra 5 226V，非一体机）。
-音频编码未实现；屏幕采集已写完但从未在真机跑过（CI 只经得住 fixture 回放那一半），而它们才是开销主体；
+音频编码未实现；屏幕采集已在 CI 的 Windows runner 上真采到过一帧，但从未在目标一体机上跑过（多屏 / DPI / 长时间连续板书都是 fixture 供不了的），而它们才是开销主体；
 目标一体机是 8 代 i5 级 CPU + 红外无压感触控，很多前提还没在真机上确认。</div>
 </body>
 </html>
