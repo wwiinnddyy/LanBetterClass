@@ -111,14 +111,12 @@ fn main() {
             if let Some(mut s) = session.take() {
                 s.finish(&out, &seq);
             }
-            session = Some(Session::start(&out, &seq, cfg.lock().unwrap().clone(), l));
+            session = Some(Session::start(&out, &seq, cfg.lock().unwrap().clone(), l, &stop));
         }
         let mut closed = false;
         if let Some(s) = session.as_mut() {
-            if stop.load(Ordering::SeqCst) {
-                s.request_stop();
-                stop.store(false, Ordering::SeqCst);
-            }
+            // 下课信号由会话自己去读（pump 的第一件事），不在这里消费掉：
+            // 正卡在限速睡眠里的那个来源也得看见它，尾巴才可能在同一个静默窗口里发完。
             s.pump(&out, &seq);
             closed = s.done;
         } else if quit.load(Ordering::SeqCst) {
@@ -252,8 +250,16 @@ enum Next {
 
 enum Source {
     Device { cap: Box<dyn Backend>, t0: Instant },
-    /// 回放：按文件名排好序的 PNG、已发位置、起始墙钟、加速倍率、每帧代表的课堂毫秒
-    Fixture { files: Vec<PathBuf>, pos: usize, t0: Instant, speed: f64, step_ms: u64 },
+    /// 回放：按文件名排好序的 PNG、已发位置、起始墙钟、加速倍率、每帧代表的课堂毫秒，
+    /// 再加一份「下课了吗」。限速睡眠必须能被它打断，否则尾帧要等完一个 poll 周期才发得出去。
+    Fixture {
+        files: Vec<PathBuf>,
+        pos: usize,
+        t0: Instant,
+        speed: f64,
+        step_ms: u64,
+        stop: Arc<AtomicBool>,
+    },
     /// 起不动（没有桌面、fixture 目录空或读不了）：只保持心跳，不产出。
     Dead,
 }
@@ -271,7 +277,7 @@ impl Source {
                     Next::Quiet
                 }
             },
-            Source::Fixture { files, pos, t0, speed, step_ms } => {
+            Source::Fixture { files, pos, t0, speed, step_ms, stop } => {
                 if *pos >= files.len() {
                     return Next::Ended;
                 }
@@ -279,10 +285,7 @@ impl Source {
                 // 节流与预算这些行为就全都测不出来了（与 a-audio 同一条理由）。
                 let at_ms = (*pos as u64) * (*step_ms);
                 let due = *t0 + Duration::from_millis((at_ms as f64 / speed.max(1.0)) as u64);
-                let now = Instant::now();
-                if due > now {
-                    std::thread::sleep(due - now);
-                }
+                wait_until(due, &**stop);
                 let path = files[*pos].clone();
                 *pos += 1;
                 match pngio::read(&path) {
@@ -314,6 +317,22 @@ impl Source {
     }
 }
 
+/// 可被「下课」打断的等待。
+///
+/// 收课是一次动作，不是一个轮询周期。限速睡眠如果不肯提前醒，StopLesson 之后还要再等
+/// 一整个 poll_ms 才发尾帧，而那正好跨过客户端 drain_tail 的 400ms 静默窗口——最后一帧与
+/// session.close 会一起掉在课外面（真机上掉过一整节课的音频总结，见 AGENTS.md）。
+/// 提前醒不损失任何信息：回放的课堂时间来自 `at_ms`，本来就不是墙钟。
+fn wait_until(due: Instant, stop: &AtomicBool) {
+    while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        if now >= due {
+            return;
+        }
+        std::thread::sleep((due - now).min(Duration::from_millis(20)));
+    }
+}
+
 /// 一节课的采集会话。
 struct Session {
     lesson_id: String,
@@ -335,15 +354,18 @@ struct Session {
     capped: u64,
     skipped: u64,
     failed: Option<String>,
-    request_stop: bool,
+    /// 下课信号。它与命令线程共享同一个 Arc：正在限速睡眠的那一侧也要看得见。
+    stop: Arc<AtomicBool>,
     done: bool,
     closed: bool,
     opened: bool,
 }
 
 impl Session {
-    fn start(out: &Out, seq: &AtomicU64, params: Value, l: LessonInfo) -> Session {
+    fn start(out: &Out, seq: &AtomicU64, params: Value, l: LessonInfo, stop: &Arc<AtomicBool>) -> Session {
         let cfg = Cfg::from_params(&params);
+        // 上一节课的「下课」不许漏进这一节：新会话从这里重新开始等命令。
+        stop.store(false, Ordering::SeqCst);
         let fixture_dir = params
             .get("fixture_dir")
             .or_else(|| params.get("fixture"))
@@ -356,7 +378,7 @@ impl Session {
         };
         let speed = params.get("speed").and_then(|v| v.as_f64()).unwrap_or(200.0);
         let (src, mut note, failed) =
-            if use_fixture { open_fixture(&cfg, fixture_dir, speed) } else { open_device(&cfg) };
+            if use_fixture { open_fixture(&cfg, fixture_dir, speed, stop) } else { open_device(&cfg) };
 
         let mut s = Session {
             lesson_id: l.lesson_id.clone(),
@@ -376,7 +398,7 @@ impl Session {
             capped: 0,
             skipped: 0,
             failed,
-            request_stop: false,
+            stop: stop.clone(),
             done: false,
             closed: false,
             opened: false,
@@ -398,8 +420,10 @@ impl Session {
         s
     }
 
+    /// 把「下课了」同时告诉会话与来源：限速睡眠里那一侧要立刻醒过来。
+    /// 信号是幂等的，所以不必区分谁先看到它。
     fn request_stop(&mut self) {
-        self.request_stop = true;
+        self.stop.store(true, Ordering::SeqCst);
     }
 
     fn pump(&mut self, out: &Out, seq: &AtomicU64) {
@@ -408,7 +432,7 @@ impl Session {
         }
         // 收课：下课那一刻屏幕上是什么，也是这节课的事实。最后再问一次，
         // 过门限就落一帧（跳过节流：这一帧没有"下一帧"会跟它撞车）。
-        if self.request_stop {
+        if self.stop.load(Ordering::SeqCst) {
             self.sample(out, seq, true);
             self.done = true;
             return;
@@ -425,7 +449,7 @@ impl Session {
         let now = Instant::now();
         if !self.src.paced_internally() && due > now {
             // 还没到下一个 poll：睡过去。空转会把一体机唯一值钱的那点 CPU 吃光。
-            std::thread::sleep(due - now);
+            wait_until(due, &self.stop);
         }
         if !self.sample(out, seq, false) {
             self.done = true;
@@ -638,7 +662,12 @@ fn open_device(cfg: &Cfg) -> (Source, Value, Option<String>) {
     }
 }
 
-fn open_fixture(cfg: &Cfg, dir: Option<PathBuf>, speed: f64) -> (Source, Value, Option<String>) {
+fn open_fixture(
+    cfg: &Cfg,
+    dir: Option<PathBuf>,
+    speed: f64,
+    stop: &Arc<AtomicBool>,
+) -> (Source, Value, Option<String>) {
     let dead = |why: String, path: String| {
         (Source::Dead, json!({ "input": "fixture", "dir": path }), Some(format!("读不到 fixture：{why}")))
     };
@@ -664,7 +693,14 @@ fn open_fixture(cfg: &Cfg, dir: Option<PathBuf>, speed: f64) -> (Source, Value, 
     let n = files.len();
     eprintln!("[{ID}] 回放 {d}：{n} 张 PNG，poll_ms={}，{speed}x 速度", cfg.poll_ms);
     (
-        Source::Fixture { files, pos: 0, t0: Instant::now(), speed: speed.max(1.0), step_ms: cfg.poll_ms },
+        Source::Fixture {
+            files,
+            pos: 0,
+            t0: Instant::now(),
+            speed: speed.max(1.0),
+            step_ms: cfg.poll_ms,
+            stop: stop.clone(),
+        },
         json!({ "input": "fixture", "dir": d, "frames": n, "speed": speed }),
         None,
     )

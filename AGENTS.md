@@ -69,9 +69,19 @@ requires recompiling the client.
 - `adapters.d/*.adapter.json` — per-environment load declarations (drop in = enable, rename = disable).
 
 **Adapter lifecycle contract**: `StopLesson` is where an adapter flushes, and the client keeps reading its
-stdout for a short quiet window after sending it and before closing the lesson. Anything emitted after
-`Stop` lands in `misc.ndjson`, i.e. outside the lesson — never defer a `session.close` or a final blob to
-`Stop`. This ordering once silently dropped a whole lesson's audio summary on real hardware.
+stdout for a short quiet window after sending it and before closing the lesson (`main.rs::drain_tail`: one
+400 ms window of silence, 3 s hard cap). Anything emitted after `Stop` lands in `misc.ndjson`, i.e. outside
+the lesson — never defer a `session.close` or a final blob to `Stop`. This ordering once silently dropped a
+whole lesson's audio summary on real hardware.
+
+Flushing must also be *prompt*, not merely early. A pacing sleep that won't wake until the next poll period
+answers `StopLesson` a whole `poll_ms` late; if that exceeds 400 ms the tail lands after the client already
+closed the lesson, and because the process is exiting too, the last frame and its `session.close` vanish
+with no `misc.ndjson` trace at all. This is what happened to `a-screen`'s replay clock on the first CI run:
+the adapter's own stderr reported 11 frames, the lesson had 10. Every wait inside an adapter is therefore
+interruptible by the stop signal (`a-screen::wait_until`), and `tools/ci-screen.sh` ④ is the guard that
+catches the regression — not because the assertion is clever, but because a dropped tail is a whole missing
+sentence.
 
 **What is a lesson fact vs. a capture-process fact**: `session.close` and `core.respawn` are facts about the
 capture process, not things that happened in the classroom, so `timeline::build` keeps them out of `track`
@@ -144,7 +154,10 @@ workflow, `.github/workflows/agent.yml`.
   lesson, and the tuning loop over `screen.min_dist`. The reverse assertion is the point: "nothing changed"
   masquerading as "many changes" turns the evidence into thousands of near-identical screenshots nobody opens.
   There is no `libasound2`-style dep — the device branch is guarded as "must not crash, must not invent blob
-  references", and ⑧ cross-checks the three copies of the backend list.
+  references", and ⑧ cross-checks the three copies of the backend list. When asserting "this source produced
+  nothing", filter `events.ndjson` by `adapter_id`: the core writes its own facts into the same file
+  (`core.admit` is ~1 KB per loaded source), so an unfiltered count reads "no desktop on this machine" as
+  "emitted events but no close record" — two different diagnoses and two different fixes.
 - `tools/ci-smoke.sh` also drives the write endpoint's four boundaries (params accepted, `argv` refused with
   the file byte-identical, reversed hysteresis refused, non-object refused) and a same-process reload guard:
   `stop` → edit `params` on disk → `start`, asserting the next lesson's segments are 8000 bytes instead of

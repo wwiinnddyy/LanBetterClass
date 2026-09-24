@@ -304,11 +304,12 @@ def kinds_of(evs, kind):
     return [e for e in evs if e['envelope']['kind'] == kind]
 
 
-def events(data, lesson='L-demo-0001'):
+def events(data, lesson='L-demo-0001', adapter=None):
     path = os.path.join(data, 'lessons', lesson, 'events.ndjson')
     if not os.path.exists(path):
         return []
-    return [json.loads(l) for l in open(path, encoding='utf-8') if l.strip()]
+    evs = [json.loads(l) for l in open(path, encoding='utf-8') if l.strip()]
+    return evs if adapter is None else [e for e in evs if e.get('adapter_id') == adapter]
 
 
 def close_of(evs):
@@ -402,7 +403,10 @@ need(c2 and c2['polls'] >= 13, f'② 问了几年？polls 应覆盖整排图：{
 
 # ---------- ③ 设备路径 ----------
 d3 = os.path.join(work, 'data-nodev')
-ev3 = events(d3)
+# 只算 a-screen 自己发的那几条。核心也往同一份日志里写事实（core.admit 每条 1k 左右），
+# 把它算进来会让「这台机器根本没有可采的桌面」看起来像「产出了事件却没收课记录」——
+# 那是两种完全不同的排障结论。
+ev3 = events(d3, adapter='a-screen')
 kf3 = kinds_of(ev3, 'screen.keyframe')
 c3 = close_of(ev3)
 # 有没有桌面是机器的事：这里只断"不许说谎、不许崩"。
